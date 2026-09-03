@@ -6,7 +6,7 @@ The bundled Inter font is distributed under the SIL Open Font License, version 1
 
 ## Design and artwork
 
-The icons, reference artwork, and sample cover images in `Assets/Figma` were supplied with the design used to build Kapla. Confirm that you have permission to redistribute those assets before making a public repository. Replace them with assets you own or have licensed if necessary.
+The icons, reference artwork, and sample cover images in `Assets/Figma` were supplied with the design used to build Kapla. Their inclusion does not change the MIT license for Kapla source code. Confirm that you have permission to redistribute those assets before republishing them, and replace assets you do not own or license.
 
 ## Trademarks
 
