@@ -1,60 +1,106 @@
-<p align="center"><img src="docs/kapla-window.png" alt="Kapla desktop audiobook player" width="620"></p>
+<p align="center">
+  <img src="docs/kapla-window.png" alt="Kapla audiobook player" width="620">
+</p>
 
-# Kapla
+<h1 align="center">Kapla</h1>
 
-Kapla is a compact, native Windows audiobook player for listening to authorized Kobo downloads and keeping supported listening progress in sync.
+<p align="center"><strong>Your audiobooks. Your desktop. No browser bloat.</strong></p>
 
-## Features
+<p align="center">
+  A tiny, native Windows audiobook player for authorized Kobo audiobooks, built to sit quietly on your desktop while you listen.
+</p>
 
-- Small resizable player with connected library, Kobo, settings, and sleep-timer views
-- Chapter navigation and chapter-relative or whole-audiobook progress
-- Light and dark themes, optional cover artwork, playback speed, and configurable skip controls
-- Kobo library browsing, concurrent downloads with progress, metadata, covers, and automatic progress sync
-- Native WPF playback with no browser runtime or emulator
+<p align="center">
+  <a href="https://github.com/azijnwater/Kapla/releases/latest">Download Kapla</a> ·
+  <a href="https://github.com/azijnwater/Kapla/issues">Report an issue</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
 
-## Download
+## Why Kapla?
 
-Download the newest portable ZIP from [GitHub Releases](https://github.com/azijnwater/Kapla/releases/latest). Builds are currently unsigned.
+Kobo audiobooks are easy to buy but not always pleasant to keep open on a Windows desktop. Kapla gives them a focused home: a small old-school utility window, native playback, chapter-aware progress, cover art, and a library that expands only when you need it.
 
-## Installation
+It is for listeners who want to:
 
-1. Extract `Kapla-<version>-windows-x64-portable.zip`.
-2. Run `Kapla.exe` or `Launch-Kapla.cmd`.
+- keep an audiobook visible without giving up their whole screen;
+- resume Kobo listening from a lightweight Windows app;
+- see the title, author, cover, chapters, and real total duration in one place;
+- use a player that starts quickly and does not need a browser runtime;
+- inspect, improve, and redistribute the software freely.
+
+## Highlights
+
+- **Kobo-first library** — connect through Kobo's device-activation flow and browse entitled audiobook titles.
+- **Native Windows player** — WPF and Windows Media Foundation, with no Electron, emulator, or web dashboard.
+- **Real audiobook controls** — chapters, previous/next chapter, 15/30-second skipping, speed control, volume, and resume position.
+- **Two progress views** — track the current chapter or see progress across the whole audiobook.
+- **Automatic progress sync** — Kapla queues supported Kobo updates in the background, retries temporary failures, and never pauses playback to sync.
+- **Download feedback** — concurrent authorized imports show titles, stages, byte totals, and percentage progress.
+- **Small by default** — a compact desktop utility that can expand into the library, Kobo connection, settings, or sleep timer.
+- **Comfortable listening** — dark mode, optional cover art, window-size memory, and a sleep timer with end-of-chapter support.
+- **Metadata that travels with the book** — title, author, narrator, series, description, artwork, duration, and chapters where Kobo or the file provides them.
+
+## Download and install
+
+Download the latest **portable Windows x64 ZIP** from [GitHub Releases](https://github.com/azijnwater/Kapla/releases/latest). Kapla does not need an installer.
+
+1. Extract the ZIP to a folder you control.
+2. Start `Kapla.exe` or `Launch-Kapla.cmd`.
 3. Windows 10 or later with .NET Framework 4.8 is required.
 
-## Connecting Kobo
+The release includes a SHA-256 checksum. Current builds are unsigned, so Windows SmartScreen may show an additional warning for a first-time download.
 
-Open Kapla, expand the top section, choose **Kobo**, and select **Connect**. Kapla uses Kobo's device-activation flow; account-session data is encrypted for the current Windows user with Windows DPAPI. After activation, library and supported progress updates synchronize automatically.
+## Connect Kobo
 
-## Local audiobooks
+Open Kapla, expand the top section, choose **Kobo**, and select **Connect**. Sign in through the device-activation flow, then return to Kapla to browse your audiobook library.
 
-The **+** view can also add M4B, M4A, MP3, and AAC files you already own. Kapla reads embedded title, author, artwork, duration, and chapter metadata when present.
+Kapla only imports a title when Kobo returns an authorized playable download manifest. Protected titles that do not provide one remain available in Kobo's official apps.
 
-## Building from source
+## A note about Kobo compatibility
 
-On Windows with the .NET Framework 4.8 developer tools:
+Kobo does not provide a stable public desktop audiobook SDK. Kapla uses the account services exposed by the official client flow, so Kobo can change or restrict those services without notice. Library access, authorized imports, and progress sync depend on what Kobo returns for your account, title, and region.
+
+Kapla does not bypass DRM, decrypt protected app storage, or pretend to be an official Kobo app. Use it only with accounts, titles, and files you are authorized to access, and follow the terms that apply to them.
+
+## Local files
+
+The **+** action can add audiobook files you already own in M4B, M4A, MP3, or AAC format. Kapla reads embedded title, author, artwork, duration, and chapter metadata when present. Local files are a convenience for owned media and metadata testing; the library and account integration remain Kobo-first.
+
+## Build from source
+
+Kapla is intentionally dependency-light: there is no package manager, browser runtime, or third-party download required for the native build. On Windows with the .NET Framework 4.8 developer tools:
 
 ```powershell
 .\Tests\run-tests.ps1
 .\build.ps1
 ```
 
-The executable and assets are written to `outputs`. Run `.\package-release.ps1` to produce the versioned portable ZIP and SHA-256 checksum locally.
+The executable and runtime assets are written to `outputs`.
 
-## Privacy and security
+To create the versioned portable package and checksum:
 
-Settings, library data, authorized downloads, and the encrypted Kobo session are stored under `%LOCALAPPDATA%\KoboNativePlayer`. Credentials, account data, and downloaded books are not part of this repository.
+```powershell
+.\package-release.ps1
+```
 
-## Known limitations
+The package is written to `release`. Generated output and per-user data are ignored by Git.
 
-Kobo does not provide Kapla with a stable public desktop audiobook SDK. Imports and progress sync work only when the account services return an authorized playable manifest and accept the progress endpoint. DRM-protected titles that do not expose such a manifest remain available through Kobo's official apps.
+## Privacy and local data
+
+Kapla stores settings, library state, downloaded authorized media, and the encrypted Kobo session under:
+
+```text
+%LOCALAPPDATA%\KoboNativePlayer
+```
+
+The Kobo session is protected with Windows DPAPI for the current Windows user. Credentials, account data, listening history, and audiobook files are not part of this repository. See [SECURITY.md](SECURITY.md) before reporting a security issue.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [SECURITY.md](SECURITY.md) for private vulnerability reports.
+Ideas, bug reports, compatibility notes, and pull requests are welcome. Please keep the utility-window feel, avoid committing personal Kobo data or downloaded media, and run the regression suite before submitting changes. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-No open-source license has been selected yet. Unless a license is added, the repository remains copyright-protected and does not grant redistribution or modification rights.
+Kapla is free and open source under the [MIT License](LICENSE). You may use, copy, modify, publish, distribute, sublicense, and sell copies of the software, subject to the license notice.
 
-Kapla is an independent project and is not affiliated with or endorsed by Kobo. See [NOTICE.md](NOTICE.md) for bundled asset and trademark notes.
+Kapla is an independent project and is not affiliated with or endorsed by Kobo. Kobo is a trademark of its respective owner. See [NOTICE.md](NOTICE.md) for bundled fonts, design assets, artwork, and trademark notes.
