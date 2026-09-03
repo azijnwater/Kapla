@@ -37,15 +37,23 @@ jobs:
             release/Kapla-*-windows-x64-portable.zip
             release/Kapla-*-checksums.txt
 
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content .\VERSION -Raw).Trim()
-          gh release create "v$version" `
-            ".\release\Kapla-$version-windows-x64-portable.zip" `
-            ".\release\Kapla-$version-checksums.txt" `
-            --verify-tag `
-            --generate-notes `
-            --title "Kapla $version"
+          $tag = "v$version"
+          $assets = @(
+            ".\release\Kapla-$version-windows-x64-portable.zip",
+            ".\release\Kapla-$version-checksums.txt"
+          )
+
+          # The release may already have been created in GitHub's web UI.
+          # Reuse it and replace its generated assets instead of failing.
+          gh release view $tag --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $assets --clobber
+          } else {
+            gh release create $tag $assets --verify-tag --generate-notes --title "Kapla $version"
+          }
