@@ -1,2 +1,8 @@
-# Auto detect text files and perform LF normalization
 * text=auto
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ttf binary
+*.exe binary
