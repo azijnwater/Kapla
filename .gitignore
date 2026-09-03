@@ -8,6 +8,7 @@ obj/
 
 # Generated builds and test executables
 outputs/
+release/
 TestResults/
 Tests/*.exe
 

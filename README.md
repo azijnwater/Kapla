@@ -1,89 +1,60 @@
+<p align="center"><img src="docs/kapla-window.png" alt="Kapla desktop audiobook player" width="620"></p>
+
 # Kapla
 
-Kapla is a compact Windows audiobook player designed to live on the desktop like a classic music utility. It keeps the player small, expands into a connected library/settings view, and uses the selected cover art to shape the accent color.
+Kapla is a compact, native Windows audiobook player for listening to authorized Kobo downloads and keeping supported listening progress in sync.
 
-![Kapla player window](docs/kapla-window.png)
+## Features
 
-## What it does
+- Small resizable player with connected library, Kobo, settings, and sleep-timer views
+- Chapter navigation and chapter-relative or whole-audiobook progress
+- Light and dark themes, optional cover artwork, playback speed, and configurable skip controls
+- Kobo library browsing, concurrent downloads with progress, metadata, covers, and automatic progress sync
+- Native WPF playback with no browser runtime or emulator
 
-- Plays authorized Kobo audiobook downloads while preserving their individual tracks and chapters.
-- Connects to a Kobo account through the device-activation flow.
-- Browses Kobo audiobook titles, covers, authors, narrators, series, descriptions, and progress.
-- Sends listening progress for linked books back to Kobo when the account service accepts it.
-- Shows download percentage, stage, byte totals, and track progress during imports.
-- Remembers playback position, bookmarks, playback speed, appearance, window placement, and library sorting locally.
-- Reads embedded metadata, artwork, and chapters from local M4B, M4A, MP3, and AAC files.
-- Uses WPF's native `MediaElement` and Windows Media Foundation for playback.
+## Download
 
-Kapla is Kobo-first. Local file support is included for metadata testing and for audiobook files that the user already owns.
+Download the newest portable ZIP from [GitHub Releases](https://github.com/azijnwater/Kapla/releases/latest). Builds are currently unsigned.
 
-## Requirements
+## Installation
 
-- Windows 10 or later.
-- .NET Framework 4.8 Developer Pack for the direct build script, or a .NET SDK with the Windows desktop targeting pack for the project file.
-- A Kobo account and audiobook entitlement for the Kobo connector.
+1. Extract `Kapla-<version>-windows-x64-portable.zip`.
+2. Run `Kapla.exe` or `Launch-Kapla.cmd`.
+3. Windows 10 or later with .NET Framework 4.8 is required.
 
-## Build and run
+## Connecting Kobo
 
-From the repository root in PowerShell:
+Open Kapla, expand the top section, choose **Kobo**, and select **Connect**. Kapla uses Kobo's device-activation flow; account-session data is encrypted for the current Windows user with Windows DPAPI. After activation, library and supported progress updates synchronize automatically.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1
-.\outputs\Kapla.exe
-```
+## Local audiobooks
 
-The build creates a self-contained `outputs` folder with `Kapla.exe`, the launcher, and the required assets. `outputs` is generated and intentionally ignored by Git.
+The **+** view can also add M4B, M4A, MP3, and AAC files you already own. Kapla reads embedded title, author, artwork, duration, and chapter metadata when present.
 
-The included project file can also be built with a Windows-capable .NET SDK:
+## Building from source
+
+On Windows with the .NET Framework 4.8 developer tools:
 
 ```powershell
-dotnet build .\Kapla.csproj
+.\Tests\run-tests.ps1
+.\build.ps1
 ```
 
-## Tests
+The executable and assets are written to `outputs`. Run `.\package-release.ps1` to produce the versioned portable ZIP and SHA-256 checksum locally.
 
-Run the regression suite with:
+## Privacy and security
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Tests\run-tests.ps1
-```
+Settings, library data, authorized downloads, and the encrypted Kobo session are stored under `%LOCALAPPDATA%\KoboNativePlayer`. Credentials, account data, and downloaded books are not part of this repository.
 
-The tests cover playback timeline boundaries, chapter alignment, settings recovery, metadata extraction, Kobo author mapping, cover fallbacks, and library persistence. They use synthetic fixtures and do not need Kobo credentials.
+## Known limitations
 
-## Kobo integration boundary
+Kobo does not provide Kapla with a stable public desktop audiobook SDK. Imports and progress sync work only when the account services return an authorized playable manifest and accept the progress endpoint. DRM-protected titles that do not expose such a manifest remain available through Kobo's official apps.
 
-The Kobo connector uses account services advertised by the Kobo client. Those services are not a stable public SDK and can change without notice. Kapla only imports a title when the account response provides an authorized playable manifest. Titles marked as protected by KDRM or Adobe DRM remain available through Kobo's supported apps.
+## Contributing
 
-Kapla does not access protected app storage, decrypt Kobo files, bypass DRM, or embed an emulator. Users are responsible for complying with the terms that apply to their account, titles, and region.
-
-Kobo is a trademark of its respective owner. Kapla is an independent project and is not endorsed by or affiliated with Kobo.
-
-## Local data and privacy
-
-Kapla stores its local library, settings, downloaded authorized media, and encrypted Kobo session under:
-
-```text
-%LOCALAPPDATA%\KoboNativePlayer
-```
-
-Session credentials are protected with Windows DPAPI for the current Windows user. Do not commit this directory, its contents, or downloaded audiobook files. The repository's `.gitignore` excludes common copies of this data.
-
-## Repository layout
-
-```text
-App.cs                    Application entry point
-MainWindow.cs             Compact player and expanded library UI
-KoboClient.cs             Kobo activation, library, download, and sync client
-KoboMetadata.cs           Kobo author/contributor metadata mapping
-LocalAudiobookMetadata.cs Local file metadata and artwork reader
-PlaybackTimeline.cs       Track/chapter timing calculations
-Models.cs                 Library, Kobo, and player models
-Assets/                   Figma-derived icons and bundled Inter font
-Tests/                    Fixture-based regression suite
-```
-
-See [`NOTICE.md`](NOTICE.md) for font, design-asset, artwork, and trademark notes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [SECURITY.md](SECURITY.md) for private vulnerability reports.
 
 ## License
 
-No open-source license has been selected for this project yet. Add the intended license before publishing if you want others to reuse, modify, or redistribute the code.
+No open-source license has been selected yet. Unless a license is added, the repository remains copyright-protected and does not grant redistribution or modification rights.
+
+Kapla is an independent project and is not affiliated with or endorsed by Kobo. See [NOTICE.md](NOTICE.md) for bundled asset and trademark notes.

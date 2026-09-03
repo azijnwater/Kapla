@@ -1,0 +1,51 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate tag and package version
+        shell: pwsh
+        run: |
+          $version = (Get-Content .\VERSION -Raw).Trim()
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match VERSION ($version)."
+          }
+
+      - name: Test, build, and package Kapla
+        shell: pwsh
+        run: .\package-release.ps1
+
+      - name: Upload release build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kapla-${{ github.ref_name }}-windows-x64
+          if-no-files-found: error
+          path: |
+            release/Kapla-*-windows-x64-portable.zip
+            release/Kapla-*-checksums.txt
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content .\VERSION -Raw).Trim()
+          gh release create "v$version" `
+            ".\release\Kapla-$version-windows-x64-portable.zip" `
+            ".\release\Kapla-$version-checksums.txt" `
+            --verify-tag `
+            --generate-notes `
+            --title "Kapla $version"

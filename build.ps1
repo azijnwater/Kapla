@@ -5,6 +5,11 @@ $outputDirectory = Join-Path $projectRoot "outputs"
 $compiler = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $frameworkDirectory = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319"
 $wpfDirectory = Join-Path $frameworkDirectory "WPF"
+$version = (Get-Content (Join-Path $projectRoot "VERSION") -Raw).Trim()
+
+if ($version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "VERSION must contain a semantic version such as 0.1.0."
+}
 
 if (-not (Test-Path $compiler)) {
     throw "The .NET Framework C# compiler was not found at $compiler."
@@ -13,6 +18,14 @@ if (-not (Test-Path $compiler)) {
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 $outputFile = Join-Path $outputDirectory "Kapla.exe"
 $sources = Get-ChildItem -Path $projectRoot -Filter "*.cs" | ForEach-Object { $_.FullName }
+$generatedVersionSource = Join-Path ([IO.Path]::GetTempPath()) ("Kapla-AssemblyInfo-" + [Guid]::NewGuid().ToString("N") + ".cs")
+[IO.File]::WriteAllText($generatedVersionSource, @"
+using System.Reflection;
+[assembly: AssemblyVersion("$version.0")]
+[assembly: AssemblyFileVersion("$version.0")]
+[assembly: AssemblyInformationalVersion("$version")]
+"@)
+$sources += $generatedVersionSource
 $references = @(
     (Join-Path $frameworkDirectory "System.dll"),
     (Join-Path $frameworkDirectory "System.Core.dll"),
@@ -30,9 +43,14 @@ $references = @(
 )
 
 $referenceArguments = $references | ForEach-Object { "/reference:$($_)" }
-& $compiler /nologo /target:winexe /optimize+ "/out:$outputFile" $referenceArguments $sources
-if ($LASTEXITCODE -ne 0) {
-    throw "Build failed with exit code $LASTEXITCODE."
+try {
+    & $compiler /nologo /target:winexe /platform:x64 /optimize+ "/out:$outputFile" $referenceArguments $sources
+    if ($LASTEXITCODE -ne 0) {
+        throw "Build failed with exit code $LASTEXITCODE."
+    }
+}
+finally {
+    Remove-Item -LiteralPath $generatedVersionSource -Force -ErrorAction SilentlyContinue
 }
 
 Copy-Item (Join-Path $projectRoot "README.md") $outputDirectory -Force

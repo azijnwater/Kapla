@@ -100,6 +100,49 @@ namespace Kapla.Tests
             CheckEqual("chapter correction preserves title", "Chapter Two", chapters[1].Title);
             CheckEqual("chapter correction updates third start", 35.0, chapters[2].StartSeconds);
             CheckEqual("chapter correction updates final end", 65.0, chapters[2].EndSeconds);
+
+            var chapterWindow = PlaybackProgress.Calculate(16, 65, chapters, PlaybackProgress.ChapterMode);
+            Check("chapter progress selected", chapterWindow.IsChapterRelative);
+            CheckEqual("chapter progress start", 10.0, chapterWindow.StartSeconds);
+            CheckEqual("chapter progress end", 35.0, chapterWindow.EndSeconds);
+            CheckEqual("chapter progress elapsed", 6.0, chapterWindow.ElapsedSeconds);
+            CheckEqual("chapter progress remaining", 19.0, chapterWindow.RemainingSeconds);
+            CheckEqual("chapter seek remains absolute", 20.0, PlaybackProgress.ToAbsolute(20, chapterWindow));
+
+            var wholeWindow = PlaybackProgress.Calculate(16, 65, chapters, PlaybackProgress.BookMode);
+            Check("whole-book progress selected", !wholeWindow.IsChapterRelative);
+            CheckEqual("whole-book progress start", 0.0, wholeWindow.StartSeconds);
+            CheckEqual("whole-book progress end", 65.0, wholeWindow.EndSeconds);
+            CheckEqual("whole-book elapsed", 16.0, wholeWindow.ElapsedSeconds);
+
+            var fallbackWindow = PlaybackProgress.Calculate(16, 65, new List<KoboChapter>(), PlaybackProgress.ChapterMode);
+            Check("chapter progress falls back without chapters", !fallbackWindow.IsChapterRelative);
+        }
+
+        private static void SleepTimerTests()
+        {
+            var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+            var timer = new SleepTimerState();
+            timer.StartDuration(now, TimeSpan.FromSeconds(2));
+            Check("duration sleep timer active", timer.IsActive);
+            Check("duration sleep timer waits", !timer.HasExpired(now.AddSeconds(1), 0));
+            Check("duration sleep timer expires", timer.HasExpired(now.AddSeconds(2), 0));
+            timer.StartEndOfChapter(120, 90);
+            Check("restarting sleep timer replaces previous mode", timer.Mode == SleepTimerMode.EndOfChapter && !timer.ExpiresUtc.HasValue);
+            Check("end-of-chapter timer waits", !timer.HasExpired(now, 119));
+            Check("end-of-chapter timer expires", timer.HasExpired(now, 120));
+            timer.Cancel();
+            Check("sleep timer cancellation", !timer.IsActive);
+        }
+
+        private static void KoboSyncPolicyTests()
+        {
+            Check("first Kobo progress queues", KoboSyncPolicy.IsMeaningfulProgress(10, -1, 30));
+            Check("small Kobo progress is debounced", !KoboSyncPolicy.IsMeaningfulProgress(35, 10, 30));
+            Check("meaningful Kobo progress queues", KoboSyncPolicy.IsMeaningfulProgress(40, 10, 30));
+            CheckEqual("first retry delay", TimeSpan.FromSeconds(5), KoboSyncPolicy.RetryDelay(1));
+            CheckEqual("retry delay grows", TimeSpan.FromSeconds(40), KoboSyncPolicy.RetryDelay(4));
+            CheckEqual("retry delay is bounded", TimeSpan.FromSeconds(160), KoboSyncPolicy.RetryDelay(20));
         }
 
         private static void SettingsTests(string root)
@@ -112,6 +155,11 @@ namespace Kapla.Tests
                 ForwardSeconds = 10,
                 Volume = 0.42,
                 AccentColor = "#75CFFF",
+                AppearanceMode = "Dark",
+                ShowCoverArtwork = false,
+                ProgressDisplayMode = PlaybackProgress.BookMode,
+                RememberWindowSize = true,
+                SavedWindowWidth = 777,
                 LibraryFolders = new List<string> { "one", "two" }
             };
             AppSettingsStore.Save(path, settings);
@@ -120,6 +168,10 @@ namespace Kapla.Tests
             CheckEqual("settings rewind round-trip", 30, loaded.RewindSeconds);
             CheckEqual("settings volume round-trip", 0.42, loaded.Volume);
             CheckEqual("settings folders round-trip", 2, loaded.LibraryFolders.Count);
+            CheckEqual("settings theme round-trip", "Dark", loaded.AppearanceMode);
+            CheckEqual("settings cover visibility round-trip", false, loaded.ShowCoverArtwork);
+            CheckEqual("settings progress mode round-trip", PlaybackProgress.BookMode, loaded.ProgressDisplayMode);
+            CheckEqual("settings window width round-trip", 777.0, loaded.SavedWindowWidth);
             File.WriteAllText(path, "not json");
             var repaired = AppSettingsStore.Load(path);
             CheckEqual("corrupt settings recover default speed", 1.0, repaired.DefaultPlaybackSpeed);
@@ -212,6 +264,8 @@ namespace Kapla.Tests
             try
             {
                 TimelineTests();
+                SleepTimerTests();
+                KoboSyncPolicyTests();
                 SettingsTests(root);
                 MetadataTests(root);
                 KoboMetadataTests();

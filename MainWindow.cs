@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.NetworkInformation;
 using System.Runtime.Serialization.Json;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -34,9 +35,15 @@ namespace Kapla
         private readonly ObservableCollection<BookEntry> visibleBooks = new ObservableCollection<BookEntry>();
         private readonly ObservableCollection<KoboRemoteBook> remoteKoboBooks = new ObservableCollection<KoboRemoteBook>();
         private readonly DispatcherTimer progressTimer;
+        private readonly DispatcherTimer koboSyncTimer;
         private readonly AppSettings appSettings;
+        private readonly SleepTimerState sleepTimer = new SleepTimerState();
 
         private Grid rootLayout;
+        private Grid cardLayout;
+        private Canvas headerCanvas;
+        private Canvas playerCanvas;
+        private Canvas playerControlsCanvas;
         private Border windowSurface;
         private Border shellSurface;
         private Border appCard;
@@ -47,6 +54,8 @@ namespace Kapla
         private Border playerSurface;
         private Button libraryToggleButton;
         private Button pinButton;
+        private Button minimizeButton;
+        private Button closeButton;
         private Button libraryTabButton;
         private Button settingsTabButton;
         private Button koboTabButton;
@@ -74,10 +83,12 @@ namespace Kapla
         private Grid chapterRow;
         private TextBlock syncText;
         private TextBlock syncDetailText;
+        private TextBlock headerSyncText;
+        private TextBlock sleepRemainingText;
+        private Button sleepCancelButton;
         private Button playButton;
         private Button chapterPreviousButton;
         private Button chapterNextButton;
-        private Button bookmarkButton;
         private Button sleepTimerButton;
         private Button connectKoboButton;
         private Button rewindButton;
@@ -111,7 +122,15 @@ namespace Kapla
         private KoboActivation pendingKoboActivation;
         private DateTime lastKoboSyncUtc = DateTime.MinValue;
         private DateTime lastSaveUtc = DateTime.MinValue;
-        private DateTime? sleepTimerEndUtc;
+        private PlaybackProgressWindow currentProgressWindow;
+        private DateTime nextKoboSyncAttemptUtc = DateTime.MaxValue;
+        private DateTime lastKoboLibraryRefreshUtc = DateTime.MinValue;
+        private double lastQueuedKoboPosition = -1;
+        private int koboSyncFailures;
+        private bool koboSyncPending;
+        private bool koboLibrarySyncPending;
+        private bool koboSyncInProgress;
+        private bool updatingWindowLayout;
         private bool libraryExpanded;
         private bool isPinned;
         private bool isExiting;
@@ -126,6 +145,19 @@ namespace Kapla
         private const int WindowMessageNonClientHitTest = 0x0084;
         private const int HitTestClient = 1;
         private const int HitTestCaption = 2;
+        private const int HitTestLeft = 10;
+        private const int HitTestRight = 11;
+        private const int HitTestTop = 12;
+        private const int HitTestTopLeft = 13;
+        private const int HitTestTopRight = 14;
+        private const int HitTestBottom = 15;
+        private const int HitTestBottomLeft = 16;
+        private const int HitTestBottomRight = 17;
+
+        private bool IsDarkTheme
+        {
+            get { return String.Equals(appSettings.AppearanceMode, "Dark", StringComparison.OrdinalIgnoreCase); }
+        }
 
         public MainWindow()
         {
@@ -134,19 +166,20 @@ namespace Kapla
             windowPositionFile = Path.Combine(dataDirectory, "window-position.txt");
             settingsFile = Path.Combine(dataDirectory, "settings.json");
             appSettings = AppSettingsStore.Load(settingsFile);
-            accentBrush = Brush(appSettings.AccentColor);
+            accentBrush = Brush(IsDarkTheme ? "#55B8F6" : "#7DD3FC");
             accentSoftBrush = WithOpacity(accentBrush.Color, 0.14);
             SvgIconFactory.AccentColor = accentBrush.Color;
             interFont = CreateInterFont();
 
             Title = "Kapla";
-            Width = 608;
-            Height = CollapsedWindowHeight;
-            MinWidth = 608;
-            MinHeight = CollapsedWindowHeight;
+            Width = appSettings.RememberWindowSize ? appSettings.SavedWindowWidth : 608;
+            Height = appSettings.RememberWindowSize ? appSettings.SavedCollapsedHeight : CollapsedWindowHeight;
+            MinWidth = appSettings.ShowCoverArtwork ? 608 : 430;
+            MinHeight = 320;
+            MaxHeight = 420;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             WindowStyle = WindowStyle.None;
-            ResizeMode = ResizeMode.NoResize;
+            ResizeMode = ResizeMode.CanResizeWithGrip;
             AllowsTransparency = true;
             Background = Brushes.Transparent;
             Foreground = Brush("#261D1B");
@@ -158,6 +191,7 @@ namespace Kapla
             Icon = CreateApplicationIcon();
 
             BuildLayout();
+            ApplyTheme(false);
             LoadWindowPosition();
             LoadLibrary();
             LoadKoboSession();
@@ -170,7 +204,7 @@ namespace Kapla
             {
                 ShowLocalMetadataPreview(metadataPreviewPath);
             }
-            Loaded += delegate
+            Loaded += async delegate
             {
                 var settingsPreview = Environment.GetEnvironmentVariable("KAPLA_SETTINGS_CATEGORY");
                 if (!String.IsNullOrWhiteSpace(settingsPreview))
@@ -182,11 +216,32 @@ namespace Kapla
                 {
                     EnsureExpanded(expandedPreview);
                 }
+                UpdateResponsiveLayout();
+                ApplyTheme(false);
+                if (koboClient != null)
+                {
+                    QueueKoboSynchronization(true, true);
+                    await ProcessKoboSyncQueueAsync();
+                }
             };
 
             progressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
             progressTimer.Tick += ProgressTimerOnTick;
             progressTimer.Start();
+
+            koboSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            koboSyncTimer.Tick += async delegate { await ProcessKoboSyncQueueAsync(); };
+            koboSyncTimer.Start();
+
+            SizeChanged += delegate { UpdateResponsiveLayout(); };
+            Activated += delegate
+            {
+                if (koboClient != null && (DateTime.UtcNow - lastKoboSyncUtc).TotalMinutes >= 2)
+                {
+                    QueueKoboSynchronization(true, false);
+                }
+            };
+            NetworkChange.NetworkAvailabilityChanged += NetworkAvailabilityChanged;
 
             SourceInitialized += MainWindowOnSourceInitialized;
             Closed += MainWindowOnClosed;
@@ -204,6 +259,9 @@ namespace Kapla
 
         private void MainWindowOnClosed(object sender, EventArgs e)
         {
+            NetworkChange.NetworkAvailabilityChanged -= NetworkAvailabilityChanged;
+            progressTimer.Stop();
+            koboSyncTimer.Stop();
             if (windowMessageSource != null)
             {
                 windowMessageSource.RemoveHook(WindowMessageHook);
@@ -239,7 +297,7 @@ namespace Kapla
                 Background = Brush("#FDF8F4"),
                 BorderBrush = Brush("#101A1111"),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(28),
+                CornerRadius = new CornerRadius(18),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Bottom,
                 Margin = new Thickness(0, 0, 0, 38),
@@ -259,22 +317,24 @@ namespace Kapla
                 Width = 560,
                 Height = 300,
                 Background = Brushes.Transparent,
-                CornerRadius = new CornerRadius(28),
+                CornerRadius = new CornerRadius(18),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Bottom,
                 Margin = new Thickness(0, 0, 0, 38)
             };
 
-            var cardCanvas = new Canvas { Width = 560, Height = 300, ClipToBounds = true };
+            cardLayout = new Grid { Height = 300, ClipToBounds = true };
             var header = BuildHeader();
-            Canvas.SetLeft(header, 28);
-            Canvas.SetTop(header, 24);
-            cardCanvas.Children.Add(header);
+            ((FrameworkElement)header).Margin = new Thickness(28, 20, 28, 0);
+            ((FrameworkElement)header).HorizontalAlignment = HorizontalAlignment.Stretch;
+            ((FrameworkElement)header).VerticalAlignment = VerticalAlignment.Top;
+            cardLayout.Children.Add(header);
             var player = BuildFigmaPlayerPanel();
-            Canvas.SetLeft(player, 28);
-            Canvas.SetTop(player, 64);
-            cardCanvas.Children.Add(player);
-            appCard.Child = cardCanvas;
+            ((FrameworkElement)player).Margin = new Thickness(0, 56, 0, 0);
+            ((FrameworkElement)player).HorizontalAlignment = HorizontalAlignment.Center;
+            ((FrameworkElement)player).VerticalAlignment = VerticalAlignment.Top;
+            cardLayout.Children.Add(player);
+            appCard.Child = cardLayout;
             rootLayout.Children.Add(appCard);
 
             librarySurface = BuildExpandedPanel() as Border;
@@ -315,13 +375,18 @@ namespace Kapla
             libraryExpanded = !libraryExpanded;
             librarySurface.Visibility = libraryExpanded ? Visibility.Visible : Visibility.Collapsed;
             shellSurface.Height = libraryExpanded ? ExpandedShellHeight : 300;
-            appCard.CornerRadius = libraryExpanded ? new CornerRadius(0, 0, 28, 28) : new CornerRadius(28);
+            appCard.CornerRadius = libraryExpanded ? new CornerRadius(0, 0, 18, 18) : new CornerRadius(18);
             appCard.BorderBrush = libraryExpanded ? Brush("#101A1111") : Brushes.Transparent;
             appCard.BorderThickness = libraryExpanded ? new Thickness(0, 1, 0, 0) : new Thickness(0);
-            Height = libraryExpanded ? ExpandedWindowHeight : CollapsedWindowHeight;
-            MinHeight = Height;
-            MaxHeight = Height;
+            var targetHeight = libraryExpanded
+                ? (appSettings.RememberWindowSize ? appSettings.SavedExpandedHeight : ExpandedWindowHeight)
+                : (appSettings.RememberWindowSize ? appSettings.SavedCollapsedHeight : CollapsedWindowHeight);
+            targetHeight = libraryExpanded ? Math.Max(584, targetHeight) : Math.Max(320, Math.Min(420, targetHeight));
+            MinHeight = libraryExpanded ? 584 : 320;
+            MaxHeight = libraryExpanded ? Double.PositiveInfinity : 420;
+            Height = targetHeight;
             Top = anchoredBottom - Height;
+            UpdateResponsiveLayout();
             var toggleSurface = libraryToggleButton.Content as Border;
             if (toggleSurface != null)
             {
@@ -333,7 +398,7 @@ namespace Kapla
                 ShowExpandedView(expandedView);
                 if (appSettings.AnimationsEnabled && !appSettings.ReduceMotion)
                 {
-                    librarySurface.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(140)));
+                    AnimateIn(librarySurface, 240, 8);
                 }
             }
         }
@@ -342,13 +407,12 @@ namespace Kapla
         {
             headerSurface = new Border
             {
-                Width = 504,
                 Height = 26,
                 Background = Brushes.Transparent,
                 Padding = new Thickness(0)
             };
 
-            var canvas = new Canvas { Width = 504, Height = 26 };
+            headerCanvas = new Canvas { Width = 504, Height = 26 };
             var brand = new Canvas { Width = 59, Height = 16 };
             brandIcon = BuildBrandIcon();
             brand.Children.Add(brandIcon);
@@ -366,27 +430,136 @@ namespace Kapla
             brand.Children.Add(brandText);
             Canvas.SetLeft(brand, 0);
             Canvas.SetTop(brand, 5);
-            canvas.Children.Add(brand);
+            headerCanvas.Children.Add(brand);
+
+            headerSyncText = FigmaText("", 8, FontWeights.Medium, Brush("#8A7E7A"));
+            headerSyncText.Width = 170;
+            headerSyncText.Height = 14;
+            Canvas.SetLeft(headerSyncText, 72);
+            Canvas.SetTop(headerSyncText, 6);
+            headerCanvas.Children.Add(headerSyncText);
 
             libraryToggleButton = MakeHeaderButton(MakeChevronIcon(true), "Show audiobook library");
             System.Windows.Automation.AutomationProperties.SetName(libraryToggleButton, "Expand library");
             libraryToggleButton.Click += delegate { ToggleLibraryExpanded(); };
-            Canvas.SetLeft(libraryToggleButton, 446);
-            canvas.Children.Add(libraryToggleButton);
+            headerCanvas.Children.Add(libraryToggleButton);
             pinButton = MakeMicroHeaderButton(BuildPinIcon(isPinned), isPinned ? "Unpin Kapla" : "Keep Kapla on top");
             System.Windows.Automation.AutomationProperties.SetName(pinButton, "Toggle always on top");
             pinButton.Click += delegate { TogglePin(); };
-            Canvas.SetLeft(pinButton, 476);
             Canvas.SetTop(pinButton, 5);
-            canvas.Children.Add(pinButton);
-            var secondDot = SvgIconFactory.Load("ellipse.svg", 8, 8);
-            Canvas.SetLeft(secondDot, 496);
-            Canvas.SetTop(secondDot, 9);
-            canvas.Children.Add(secondDot);
+            headerCanvas.Children.Add(pinButton);
+            minimizeButton = MakeMicroHeaderButton(BuildWindowGlyph("—"), "Minimize Kapla");
+            System.Windows.Automation.AutomationProperties.SetName(minimizeButton, "Minimize");
+            minimizeButton.Click += delegate { WindowState = WindowState.Minimized; };
+            Canvas.SetTop(minimizeButton, 5);
+            headerCanvas.Children.Add(minimizeButton);
+            closeButton = MakeMicroHeaderButton(BuildWindowGlyph("×"), "Close Kapla");
+            System.Windows.Automation.AutomationProperties.SetName(closeButton, "Close");
+            closeButton.Click += delegate { Close(); };
+            Canvas.SetTop(closeButton, 5);
+            headerCanvas.Children.Add(closeButton);
 
             headerSurface.PreviewMouseLeftButtonDown += HeaderSurfaceOnMouseLeftButtonDown;
-            headerSurface.Child = canvas;
+            headerSurface.Child = headerCanvas;
             return headerSurface;
+        }
+
+        private UIElement BuildWindowGlyph(string glyph)
+        {
+            return new TextBlock
+            {
+                Text = glyph,
+                FontFamily = new FontFamily("Segoe UI"),
+                FontSize = glyph == "×" ? 13 : 11,
+                FontWeight = FontWeights.Medium,
+                Foreground = IsDarkTheme ? Brush("#DCE3EA") : Brush("#741A1111"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = glyph == "—" ? new Thickness(0, -4, 0, 0) : new Thickness(0, -1, 0, 0)
+            };
+        }
+
+        private void UpdateResponsiveLayout()
+        {
+            if (updatingWindowLayout || shellSurface == null || appCard == null || librarySurface == null)
+            {
+                return;
+            }
+            updatingWindowLayout = true;
+            try
+            {
+                var availableWidth = Math.Max(appSettings.ShowCoverArtwork ? 560 : 382, ActualWidth - 48);
+                var surfaceWidth = Math.Min(760, availableWidth);
+                shellSurface.Width = surfaceWidth;
+                appCard.Width = surfaceWidth;
+                librarySurface.Width = surfaceWidth;
+                if (headerSurface != null && headerCanvas != null)
+                {
+                    var headerWidth = Math.Max(326, surfaceWidth - 56);
+                    headerSurface.Width = headerWidth;
+                    headerCanvas.Width = headerWidth;
+                    Canvas.SetLeft(libraryToggleButton, headerWidth - 94);
+                    Canvas.SetLeft(pinButton, headerWidth - 60);
+                    Canvas.SetLeft(minimizeButton, headerWidth - 38);
+                    Canvas.SetLeft(closeButton, headerWidth - 16);
+                    if (headerSyncText != null)
+                    {
+                        headerSyncText.Width = Math.Max(40, headerWidth - 182);
+                    }
+                }
+                ApplyCoverVisibility(false);
+
+                if (libraryExpanded)
+                {
+                    var panelHeight = Math.Max(168, ActualHeight - 352);
+                    librarySurface.Height = panelHeight;
+                    shellSurface.Height = 300 + panelHeight;
+                }
+                else
+                {
+                    librarySurface.Height = ExpandedPanelHeight;
+                    shellSurface.Height = 300;
+                }
+            }
+            finally
+            {
+                updatingWindowLayout = false;
+            }
+        }
+
+        private void ApplyCoverVisibility(bool animate)
+        {
+            if (coverBorder == null || playerSurface == null || playerCanvas == null || playerControlsCanvas == null)
+            {
+                return;
+            }
+            var show = appSettings.ShowCoverArtwork;
+            MinWidth = show ? 608 : 430;
+            coverBorder.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            playerSurface.Width = show ? 504 : 330;
+            playerCanvas.Width = show ? 504 : 330;
+            Canvas.SetLeft(playerControlsCanvas, show ? 174 : 0);
+            if (animate && appSettings.AnimationsEnabled && !appSettings.ReduceMotion)
+            {
+                AnimateIn(playerSurface, 200, show ? -4 : 4);
+            }
+        }
+
+        private void AnimateIn(UIElement element, int milliseconds, double offsetY)
+        {
+            if (element == null || !appSettings.AnimationsEnabled || appSettings.ReduceMotion)
+            {
+                if (element != null) element.Opacity = 1;
+                return;
+            }
+            var transform = new TranslateTransform(0, offsetY);
+            element.RenderTransform = transform;
+            element.Opacity = 0;
+            element.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(milliseconds)));
+            transform.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(offsetY, 0, TimeSpan.FromMilliseconds(milliseconds))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            });
         }
 
         private UIElement BuildLibraryPanel()
@@ -537,7 +710,7 @@ namespace Kapla
                 Background = Brushes.Transparent,
                 Padding = new Thickness(28, 18, 28, 12),
                 BorderThickness = new Thickness(0),
-                CornerRadius = new CornerRadius(28, 28, 0, 0)
+                CornerRadius = new CornerRadius(18, 18, 0, 0)
             };
 
             var root = new Grid();
@@ -623,7 +796,7 @@ namespace Kapla
             if (expandedView == "settings")
             {
                 expandedContentHost.Content = BuildSettingsView();
-                statusText.Text = "Changes are saved automatically on this PC.";
+                statusText.Text = String.Empty;
             }
             else if (expandedView == "kobo")
             {
@@ -634,10 +807,17 @@ namespace Kapla
                 expandedContentHost.Content = BuildAddView();
                 statusText.Text = "Choose where this audiobook comes from.";
             }
+            else if (expandedView == "sleep")
+            {
+                expandedContentHost.Content = BuildSleepTimerView();
+            }
             else
             {
                 expandedContentHost.Content = BuildLibraryShelfView();
             }
+            ApplyThemeToElement(expandedContentHost);
+            AnimateIn(expandedContentHost, 190, 4);
+            Dispatcher.BeginInvoke(new Action(delegate { ApplyThemeToElement(expandedContentHost); }), DispatcherPriority.Loaded);
         }
 
         private void SetPanelTabState(Button button, bool active)
@@ -647,7 +827,9 @@ namespace Kapla
                 return;
             }
             button.Background = active ? accentSoftBrush : Brushes.Transparent;
-            button.Foreground = active ? Brush("#285D78") : Brush("#8A1A1111");
+            button.Foreground = active
+                ? (IsDarkTheme ? Brush("#8DD3FF") : Brush("#285D78"))
+                : (IsDarkTheme ? Brush("#AAB3BD") : Brush("#8A1A1111"));
         }
 
         private static ControlTemplate MakeRoundedButtonTemplate(double radius)
@@ -836,7 +1018,7 @@ namespace Kapla
             var local = MakeCompactActionButton("Choose local audiobook…", true);
             local.Click += delegate { ImportLocalAudiobook(); };
             row.Children.Add(local);
-            var kobo = MakeCompactActionButton("Connect or sync Kobo", false);
+            var kobo = MakeCompactActionButton("Open Kobo library", false);
             kobo.Margin = new Thickness(8, 0, 0, 0);
             kobo.Click += delegate { EnsureExpanded("kobo"); };
             row.Children.Add(kobo);
@@ -921,7 +1103,9 @@ namespace Kapla
         private void SetSettingsCategoryState(Button button, bool active)
         {
             button.Background = active ? accentSoftBrush : Brushes.Transparent;
-            button.Foreground = active ? Brush("#285D78") : Brush("#8A7E7A");
+            button.Foreground = active
+                ? (IsDarkTheme ? Brush("#8DD3FF") : Brush("#285D78"))
+                : (IsDarkTheme ? Brush("#AAB3BD") : Brush("#8A7E7A"));
         }
 
         private UIElement BuildSettingsCategoryContent(string category)
@@ -949,6 +1133,7 @@ namespace Kapla
             var left = new StackPanel();
             left.Children.Add(MakeSettingsSectionLabel("WINDOW"));
             left.Children.Add(MakeCompactSettingsCheck("Remember window position", appSettings.RememberWindowPosition, value => appSettings.RememberWindowPosition = value));
+            left.Children.Add(MakeCompactSettingsCheck("Remember window size", appSettings.RememberWindowSize, value => appSettings.RememberWindowSize = value));
             left.Children.Add(MakeCompactSettingsCheck("Always on top by default", appSettings.AlwaysOnTopByDefault, value =>
             {
                 appSettings.AlwaysOnTopByDefault = value;
@@ -956,7 +1141,6 @@ namespace Kapla
                 Topmost = value;
                 UpdatePinVisual();
             }));
-            left.Children.Add(new TextBlock { Text = "Fixed 560 × 300 Figma player", FontFamily = interFont, FontSize = 8, Foreground = Brush("#8A7E7A"), Margin = new Thickness(0, 3, 0, 0) });
 
             var right = new StackPanel();
             right.Children.Add(MakeSettingsSectionLabel("STARTUP & CLOSE"));
@@ -999,6 +1183,11 @@ namespace Kapla
             right.Children.Add(MakeSettingsSectionLabel("LISTENING"));
             right.Children.Add(MakeCompactSettingsCheck("Auto-resume selected books", appSettings.AutoResume, value => appSettings.AutoResume = value));
             right.Children.Add(MakeCompactSettingsCheck("Remember playback position", appSettings.RememberPlaybackPosition, value => appSettings.RememberPlaybackPosition = value));
+            right.Children.Add(MakeCompactSettingsValue("Progress", new[] { PlaybackProgress.ChapterMode, PlaybackProgress.BookMode }, appSettings.ProgressDisplayMode, value =>
+            {
+                appSettings.ProgressDisplayMode = value;
+                if (currentBook != null) UpdateProgressDisplay(CurrentAbsolutePosition());
+            }));
             right.Children.Add(MakeCompactSettingsValue("Sleep", new[] { "15 minutes", "30 minutes", "45 minutes", "60 minutes" }, appSettings.DefaultSleepMinutes + " minutes", value => appSettings.DefaultSleepMinutes = ParseLeadingInt(value, 30)));
             right.Children.Add(MakeCompactVolumeRow());
             return MakeSettingsColumns(left, right);
@@ -1064,21 +1253,23 @@ namespace Kapla
         private UIElement BuildAppearanceSettingsContent()
         {
             var left = new StackPanel();
-            left.Children.Add(MakeSettingsSectionLabel("COLOR"));
-            left.Children.Add(MakeCompactSettingsValue("Theme", new[] { "Light" }, appSettings.AppearanceMode, value => appSettings.AppearanceMode = value));
-            left.Children.Add(MakeCompactSettingsValue("Accent", new[] { "Icy blue", "Sky blue", "Frost blue" }, AccentName(appSettings.AccentColor), value => ApplyAccent(AccentFromName(value))));
-            var swatches = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(76, 5, 0, 0) };
-            foreach (var color in new[] { "#75CFFF", "#7DD3FC", "#8BD8FF" })
+            left.Children.Add(MakeSettingsSectionLabel("APPEARANCE"));
+            left.Children.Add(MakeCompactSettingsValue("Theme", new[] { "Light", "Dark" }, appSettings.AppearanceMode, value =>
             {
-                swatches.Children.Add(new Border { Width = 18, Height = 6, CornerRadius = new CornerRadius(3), Background = Brush(color), Margin = new Thickness(0, 0, 5, 0) });
-            }
-            left.Children.Add(swatches);
+                appSettings.AppearanceMode = value;
+                ApplyTheme(true);
+            }));
+            left.Children.Add(MakeCompactSettingsCheck("Show cover artwork", appSettings.ShowCoverArtwork, value =>
+            {
+                appSettings.ShowCoverArtwork = value;
+                ApplyCoverVisibility(true);
+                UpdateResponsiveLayout();
+            }));
 
             var right = new StackPanel();
             right.Children.Add(MakeSettingsSectionLabel("MOTION"));
             right.Children.Add(MakeCompactSettingsCheck("Animations", appSettings.AnimationsEnabled, value => appSettings.AnimationsEnabled = value));
             right.Children.Add(MakeCompactSettingsCheck("Reduce motion", appSettings.ReduceMotion, value => appSettings.ReduceMotion = value));
-            right.Children.Add(new TextBlock { Text = "Soft depth and restrained blue highlights keep the compact Figma character.", FontFamily = interFont, FontSize = 8, Foreground = Brush("#8A7E7A"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 0) });
             return MakeSettingsColumns(left, right);
         }
 
@@ -1365,7 +1556,7 @@ namespace Kapla
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
             accountRow.Children.Add(koboAccountStatusText);
-            var connect = MakeCompactActionButton(koboClient == null ? "Connect" : "Sync", true);
+            var connect = MakeCompactActionButton(koboClient == null ? "Connect" : "Refresh library", true);
             connect.Click += delegate { ConnectKobo(); };
             Grid.SetColumn(connect, 1);
             accountRow.Children.Add(connect);
@@ -1708,39 +1899,111 @@ namespace Kapla
             }
         }
 
-        private static string AccentName(string color)
+        private void ApplyTheme(bool animate)
         {
-            if (String.Equals(color, "#75CFFF", StringComparison.OrdinalIgnoreCase)) return "Sky blue";
-            if (String.Equals(color, "#8BD8FF", StringComparison.OrdinalIgnoreCase)) return "Frost blue";
-            return "Icy blue";
-        }
-
-        private static string AccentFromName(string name)
-        {
-            if (name == "Sky blue") return "#75CFFF";
-            if (name == "Frost blue") return "#8BD8FF";
-            return "#7DD3FC";
-        }
-
-        private void ApplyAccent(string color)
-        {
-            appSettings.AccentColor = color;
-            accentBrush = Brush(color);
-            accentSoftBrush = WithOpacity(accentBrush.Color, 0.14);
+            accentBrush = Brush(IsDarkTheme ? "#55B8F6" : "#7DD3FC");
+            accentSoftBrush = WithOpacity(accentBrush.Color, IsDarkTheme ? 0.20 : 0.14);
+            appSettings.AccentColor = accentBrush.Color.ToString();
             SvgIconFactory.AccentColor = accentBrush.Color;
+            Foreground = IsDarkTheme ? Brush("#F4F0EC") : Brush("#261D1B");
+            if (shellSurface != null)
+            {
+                shellSurface.Background = IsDarkTheme ? Brush("#171A1F") : Brush("#FDF8F4");
+                shellSurface.BorderBrush = IsDarkTheme ? Brush("#38414C") : Brush("#101A1111");
+            }
+            if (appCard != null) appCard.Background = IsDarkTheme ? Brush("#171A1F") : Brush("#FDF8F4");
+            if (librarySurface != null) librarySurface.Background = IsDarkTheme ? Brush("#171A1F") : Brush("#FDF8F4");
+            ApplyThemeToElement(rootLayout);
             if (progressFill != null) progressFill.Background = accentBrush;
             if (progressThumb != null) progressThumb.Background = accentBrush;
-            if (playerStateText != null) playerStateText.Foreground = Brush("#4D9FC4");
+            if (progressSlider != null) progressSlider.Foreground = accentBrush;
+            if (playerStateText != null) playerStateText.Foreground = accentBrush;
             if (playButton != null && playButton.Content is Border) ((Border)playButton.Content).Background = BuildPlayButtonBrush();
             if (speedButton != null) speedButton.Content = MakeSpeedContent(speedBox == null || speedBox.SelectedItem == null ? "1.0x" : speedBox.SelectedItem.ToString());
-            if (koboDownloadProgress != null) koboDownloadProgress.Foreground = accentBrush;
             if (brandIcon != null) brandIcon.Background = BuildBrandBrush();
-            Icon = CreateApplicationIcon();
+            if (minimizeButton != null) minimizeButton.Content = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(5), Background = Brushes.Transparent, Child = BuildWindowGlyph("—") };
+            if (closeButton != null) closeButton.Content = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(5), Background = Brushes.Transparent, Child = BuildWindowGlyph("×") };
             UpdatePinVisual();
             SetPanelTabState(libraryTabButton, expandedView == "library");
             SetPanelTabState(settingsTabButton, expandedView == "settings");
             SetPanelTabState(koboTabButton, expandedView == "kobo");
+            if (animate) AnimateIn(rootLayout, 210, 0);
             SaveSettings();
+        }
+
+        private void ApplyThemeToElement(DependencyObject element)
+        {
+            if (element == null)
+            {
+                return;
+            }
+            var border = element as Border;
+            if (border != null)
+            {
+                border.Background = ThemeBrush(border.Background);
+                border.BorderBrush = ThemeBrush(border.BorderBrush);
+            }
+            var panel = element as Panel;
+            if (panel != null) panel.Background = ThemeBrush(panel.Background);
+            var text = element as TextBlock;
+            if (text != null) text.Foreground = ThemeBrush(text.Foreground);
+            var control = element as Control;
+            if (control != null)
+            {
+                control.Background = ThemeBrush(control.Background);
+                control.Foreground = ThemeBrush(control.Foreground);
+                control.BorderBrush = ThemeBrush(control.BorderBrush);
+            }
+            var shape = element as System.Windows.Shapes.Shape;
+            if (shape != null)
+            {
+                shape.Fill = ThemeBrush(shape.Fill);
+                shape.Stroke = ThemeBrush(shape.Stroke);
+            }
+            var count = VisualTreeHelper.GetChildrenCount(element);
+            for (var index = 0; index < count; index++)
+            {
+                ApplyThemeToElement(VisualTreeHelper.GetChild(element, index));
+            }
+        }
+
+        private Brush ThemeBrush(Brush value)
+        {
+            var solid = value as SolidColorBrush;
+            if (solid == null)
+            {
+                return value;
+            }
+            var color = solid.Color;
+            var rgb = String.Format(CultureInfo.InvariantCulture, "{0:X2}{1:X2}{2:X2}", color.R, color.G, color.B);
+            string replacement = null;
+            if (IsDarkTheme)
+            {
+                if (rgb == "FDF8F4") replacement = "#171A1F";
+                else if (rgb == "FFFFFF") replacement = "#232830";
+                else if (rgb == "EFE8E8" || rgb == "F7F0EA" || rgb == "E7E0DC" || rgb == "DDF3FC") replacement = "#2A3038";
+                else if (rgb == "1A1111" || rgb == "261D1B") replacement = "#F4F0EC";
+                else if (rgb == "8A7E7A" || rgb == "AB9F9A" || rgb == "6F625E" || rgb == "9E9490" || rgb == "9B908C") replacement = "#AAB3BD";
+                else if (rgb == "4D9FC4" || rgb == "285D78" || rgb == "5FAED2") replacement = "#55B8F6";
+                else if (rgb == "E8DDD7" || rgb == "DED4CF" || rgb == "D7DFDA" || rgb == "A7DDF7") replacement = "#38414C";
+            }
+            else
+            {
+                if (rgb == "171A1F") replacement = "#FDF8F4";
+                else if (rgb == "232830") replacement = "#FFFFFF";
+                else if (rgb == "2A3038") replacement = "#EFE8E8";
+                else if (rgb == "F4F0EC" || rgb == "DCE3EA") replacement = "#1A1111";
+                else if (rgb == "AAB3BD") replacement = "#8A7E7A";
+                else if (rgb == "55B8F6" || rgb == "8DD3FF") replacement = "#7DD3FC";
+                else if (rgb == "38414C" || rgb == "405063") replacement = "#E8DDD7";
+            }
+            if (replacement == null)
+            {
+                return value;
+            }
+            var mapped = (Color)ColorConverter.ConvertFromString(replacement);
+            mapped.A = color.A;
+            return new SolidColorBrush(mapped);
         }
 
         private Brush BuildPlayButtonBrush()
@@ -1775,7 +2038,7 @@ namespace Kapla
 
         private Button MakeCompactActionButton(string label, bool primary)
         {
-            return new Button
+            var button = new Button
             {
                 Content = label,
                 Height = 26,
@@ -1790,6 +2053,8 @@ namespace Kapla
                 Cursor = Cursors.Hand,
                 Template = MakeRoundedButtonTemplate(7)
             };
+            AttachMicroInteraction(button, 1.025);
+            return button;
         }
 
         private UIElement BuildFigmaPlayerPanel()
@@ -1801,7 +2066,7 @@ namespace Kapla
                 Background = Brushes.Transparent
             };
 
-            var playerCanvas = new Canvas { Width = 504, Height = 212 };
+            playerCanvas = new Canvas { Width = 504, Height = 212 };
             coverBorder = new Border
             {
                 Width = 152,
@@ -1823,9 +2088,10 @@ namespace Kapla
             Canvas.SetTop(coverBorder, 30);
             playerCanvas.Children.Add(coverBorder);
 
-            var controls = new Canvas { Width = 330, Height = 212 };
-            Canvas.SetLeft(controls, 174);
-            playerCanvas.Children.Add(controls);
+            playerControlsCanvas = new Canvas { Width = 330, Height = 212 };
+            Canvas.SetLeft(playerControlsCanvas, 174);
+            playerCanvas.Children.Add(playerControlsCanvas);
+            var controls = playerControlsCanvas;
 
             playerStateText = FigmaText("READY WHEN YOU ARE", 10, FontWeights.Bold, Brush("#4D9FC4"));
             playerStateText.Width = 330;
@@ -1933,7 +2199,8 @@ namespace Kapla
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand
             };
-            progressSlider.PreviewMouseLeftButtonDown += delegate { isDraggingProgress = true; };
+            progressSlider.PreviewMouseLeftButtonDown += ProgressSliderOnMouseLeftButtonDown;
+            progressSlider.PreviewMouseMove += ProgressSliderOnMouseMove;
             progressSlider.PreviewMouseLeftButtonUp += ProgressSliderOnMouseLeftButtonUp;
             progressSlider.ValueChanged += ProgressSliderOnValueChanged;
             Canvas.SetLeft(progressSlider, 0);
@@ -1946,10 +2213,6 @@ namespace Kapla
             Canvas.SetLeft(positionText, 0);
             Canvas.SetTop(positionText, 125);
             controls.Children.Add(positionText);
-            var chapterDots = SvgIconFactory.Load("chapter-progress-dots.svg", 18, 4);
-            Canvas.SetLeft(chapterDots, 153.5);
-            Canvas.SetTop(chapterDots, 129);
-            controls.Children.Add(chapterDots);
             durationText = FigmaText("-0:00", 10, FontWeights.Medium, Brush("#661A1111"));
             durationText.Width = 60;
             durationText.Height = 12;
@@ -1965,27 +2228,21 @@ namespace Kapla
 
             rewindButton = MakeTransportButton("skip-back-15.svg", "Skip back " + appSettings.RewindSeconds + " seconds", appSettings.RewindSeconds);
             rewindButton.Click += delegate { Skip(-appSettings.RewindSeconds); };
-            Canvas.SetLeft(rewindButton, 60.4);
+            Canvas.SetLeft(rewindButton, 72);
             Canvas.SetTop(rewindButton, 155);
             controls.Children.Add(rewindButton);
 
             playButton = MakeFigmaPlayButton();
             playButton.Click += delegate { TogglePlay(); };
-            Canvas.SetLeft(playButton, 116.8);
+            Canvas.SetLeft(playButton, 143);
             Canvas.SetTop(playButton, 149);
             controls.Children.Add(playButton);
 
             forwardButton = MakeTransportButton("skip-forward-15.svg", "Skip forward " + appSettings.ForwardSeconds + " seconds", appSettings.ForwardSeconds);
             forwardButton.Click += delegate { Skip(appSettings.ForwardSeconds); };
-            Canvas.SetLeft(forwardButton, 185.2);
+            Canvas.SetLeft(forwardButton, 226);
             Canvas.SetTop(forwardButton, 155);
             controls.Children.Add(forwardButton);
-
-            bookmarkButton = MakeTransportButton("bookmark.svg", "Bookmark current position", (int?)null);
-            bookmarkButton.Click += BookmarkButtonOnClick;
-            Canvas.SetLeft(bookmarkButton, 241.6);
-            Canvas.SetTop(bookmarkButton, 155);
-            controls.Children.Add(bookmarkButton);
 
             sleepTimerButton = MakeTransportButton("moon.svg", "Sleep timer", (int?)null);
             sleepTimerButton.Click += SleepTimerButtonOnClick;
@@ -2025,6 +2282,7 @@ namespace Kapla
             };
 
             playerSurface.Child = playerCanvas;
+            ApplyCoverVisibility(false);
             return playerSurface;
         }
 
@@ -2104,9 +2362,9 @@ namespace Kapla
             return crop;
         }
 
-        private static Button MakeHeaderButton(UIElement icon, string tooltip)
+        private Button MakeHeaderButton(UIElement icon, string tooltip)
         {
-            return new Button
+            var button = new Button
             {
                 Width = 26,
                 Height = 26,
@@ -2115,6 +2373,7 @@ namespace Kapla
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 ToolTip = tooltip,
+                Template = MakeRoundedButtonTemplate(7),
                 Content = new Border
                 {
                     Width = 26,
@@ -2124,6 +2383,8 @@ namespace Kapla
                     Child = icon
                 }
             };
+            AttachMicroInteraction(button, 1.035);
+            return button;
         }
 
         private static UIElement MakeChevronIcon(bool up)
@@ -2153,7 +2414,7 @@ namespace Kapla
 
         private Button MakeMicroHeaderButton(UIElement icon, string tooltip)
         {
-            return new Button
+            var button = new Button
             {
                 Width = 16,
                 Height = 16,
@@ -2162,6 +2423,7 @@ namespace Kapla
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 ToolTip = tooltip,
+                Template = MakeRoundedButtonTemplate(5),
                 Content = new Border
                 {
                     Width = 16,
@@ -2171,6 +2433,8 @@ namespace Kapla
                     Child = icon
                 }
             };
+            AttachMicroInteraction(button, 1.04);
+            return button;
         }
 
         private UIElement BuildPinIcon(bool pinned)
@@ -2208,7 +2472,7 @@ namespace Kapla
 
         private Button MakeChapterButton(string assetName, string tooltip)
         {
-            return new Button
+            var button = new Button
             {
                 Width = 20,
                 Height = 20,
@@ -2217,6 +2481,7 @@ namespace Kapla
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 ToolTip = tooltip,
+                Template = MakeRoundedButtonTemplate(6),
                 Content = new Border
                 {
                     Width = 20,
@@ -2226,6 +2491,8 @@ namespace Kapla
                     Child = SvgIconFactory.Load(assetName, 10, 10)
                 }
             };
+            AttachMicroInteraction(button, 1.035);
+            return button;
         }
 
         private Button MakeSpeedButton()
@@ -2239,8 +2506,10 @@ namespace Kapla
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 ToolTip = "Playback speed",
+                Template = MakeRoundedButtonTemplate(6),
                 Content = MakeSpeedContent("1.0x")
             };
+            AttachMicroInteraction(button, 1.03);
             button.Click += delegate
             {
                 if (speedBox != null && speedBox.Items.Count > 0)
@@ -2265,7 +2534,7 @@ namespace Kapla
                     FontFamily = interFont,
                     FontSize = 11,
                     FontWeight = FontWeights.Bold,
-                    Foreground = Brush("#285D78"),
+                    Foreground = IsDarkTheme ? Brush("#8DD3FF") : Brush("#285D78"),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 }
@@ -2290,7 +2559,7 @@ namespace Kapla
                 Canvas.SetTop(label, 20);
                 canvas.Children.Add(label);
             }
-            return new Button
+            var button = new Button
             {
                 Width = 32,
                 Height = 32,
@@ -2299,13 +2568,16 @@ namespace Kapla
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 ToolTip = tooltip,
+                Template = MakeRoundedButtonTemplate(7),
                 Content = canvas
             };
+            AttachMicroInteraction(button, 1.04);
+            return button;
         }
 
         private Button MakeFigmaPlayButton()
         {
-            return new Button
+            var button = new Button
             {
                 Width = 44,
                 Height = 44,
@@ -2314,6 +2586,7 @@ namespace Kapla
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 ToolTip = "Play or pause",
+                Template = MakeRoundedButtonTemplate(22),
                 Content = new Border
                 {
                     Width = 44,
@@ -2331,6 +2604,40 @@ namespace Kapla
                     Child = BuildPlayIcon(false)
                 }
             };
+            AttachMicroInteraction(button, 1.035);
+            return button;
+        }
+
+        private void AttachMicroInteraction(Button button, double hoverScale)
+        {
+            if (button == null)
+            {
+                return;
+            }
+            button.RenderTransformOrigin = new Point(0.5, 0.5);
+            var scale = new ScaleTransform(1, 1);
+            button.RenderTransform = scale;
+            Action<double, int> animate = delegate(double target, int milliseconds)
+            {
+                if (!button.IsEnabled)
+                {
+                    target = 1;
+                }
+                if (!appSettings.AnimationsEnabled || appSettings.ReduceMotion)
+                {
+                    scale.ScaleX = target;
+                    scale.ScaleY = target;
+                    return;
+                }
+                var easing = new QuadraticEase { EasingMode = EasingMode.EaseOut };
+                scale.BeginAnimation(ScaleTransform.ScaleXProperty, new DoubleAnimation(target, TimeSpan.FromMilliseconds(milliseconds)) { EasingFunction = easing });
+                scale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(target, TimeSpan.FromMilliseconds(milliseconds)) { EasingFunction = easing });
+            };
+            button.MouseEnter += delegate { if (!button.IsPressed) animate(hoverScale, 150); };
+            button.MouseLeave += delegate { animate(1, 150); };
+            button.PreviewMouseLeftButtonDown += delegate { animate(0.96, 80); };
+            button.PreviewMouseLeftButtonUp += delegate { animate(button.IsMouseOver ? hoverScale : 1, 140); };
+            button.IsEnabledChanged += delegate { button.Opacity = button.IsEnabled ? 1 : 0.42; animate(1, 0); };
         }
 
         private UIElement BuildPlayIcon(bool paused)
@@ -2439,6 +2746,25 @@ namespace Kapla
                 return IntPtr.Zero;
             }
 
+            const double resizeBorder = 8;
+            var left = clientPoint.X <= resizeBorder;
+            var right = clientPoint.X >= ActualWidth - resizeBorder;
+            var top = clientPoint.Y <= resizeBorder;
+            var bottom = clientPoint.Y >= ActualHeight - resizeBorder;
+            var resizeHit = top && left ? HitTestTopLeft
+                : top && right ? HitTestTopRight
+                : bottom && left ? HitTestBottomLeft
+                : bottom && right ? HitTestBottomRight
+                : left ? HitTestLeft
+                : right ? HitTestRight
+                : top ? HitTestTop
+                : bottom ? HitTestBottom : 0;
+            if (resizeHit != 0)
+            {
+                handled = true;
+                return new IntPtr(resizeHit);
+            }
+
             if (!IsPointInsideElement(shellSurface, clientPoint) || IsInteractiveElementAt(clientPoint))
             {
                 return new IntPtr(HitTestClient);
@@ -2499,9 +2825,10 @@ namespace Kapla
                 ? 0
                 : (progressSlider.Value - progressSlider.Minimum) / (progressSlider.Maximum - progressSlider.Minimum);
             ratio = Math.Max(0, Math.Min(1, ratio));
-            var width = 330 * ratio;
+            var trackWidth = progressSlider.ActualWidth > 1 ? progressSlider.ActualWidth : progressSlider.Width;
+            var width = trackWidth * ratio;
             progressFill.Width = width;
-            Canvas.SetLeft(progressThumb, Math.Max(0, Math.Min(320, width - 5)));
+            Canvas.SetLeft(progressThumb, Math.Max(0, Math.Min(trackWidth - progressThumb.Width, width - progressThumb.Width / 2)));
         }
 
         private UIElement BuildPlayerPanel()
@@ -2680,18 +3007,11 @@ namespace Kapla
 
             var times = new Grid { Margin = new Thickness(0, -2, 0, 0) };
             times.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            times.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             times.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             positionText = MakeTimeText("0:00");
             durationText = MakeTimeText("0:00");
             times.Children.Add(positionText);
-            var dots = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-            dots.Children.Add(MakeTimelineDot(true));
-            dots.Children.Add(MakeTimelineDot(false));
-            dots.Children.Add(MakeTimelineDot(false));
-            Grid.SetColumn(dots, 1);
-            times.Children.Add(dots);
-            Grid.SetColumn(durationText, 2);
+            Grid.SetColumn(durationText, 1);
             durationText.HorizontalAlignment = HorizontalAlignment.Right;
             times.Children.Add(durationText);
             Grid.SetRow(times, 7);
@@ -2749,11 +3069,6 @@ namespace Kapla
             forward.Click += delegate { Skip(15); };
             Grid.SetColumn(forward, 3);
             controls.Children.Add(forward);
-
-            var bookmark = MakeGlyphButton("♡", "Bookmark chapter");
-            bookmark.Margin = new Thickness(19, 0, 17, 0);
-            Grid.SetColumn(bookmark, 4);
-            controls.Children.Add(bookmark);
 
             var night = MakeGlyphButton("☾", "Night mode");
             Grid.SetColumn(night, 5);
@@ -2837,18 +3152,6 @@ namespace Kapla
                 FontSize = 12,
                 Foreground = Brush("#8F8783"),
                 VerticalAlignment = VerticalAlignment.Center
-            };
-        }
-
-        private static Border MakeTimelineDot(bool active)
-        {
-            return new Border
-            {
-                Width = 6,
-                Height = 6,
-                CornerRadius = new CornerRadius(3),
-                Background = active ? Brush("#7DD3FC") : Brush("#DCEEF6"),
-                Margin = new Thickness(2, 0, 2, 0)
             };
         }
 
@@ -3169,12 +3472,25 @@ namespace Kapla
         {
             try
             {
+                if (appSettings.RememberWindowSize && WindowState == WindowState.Normal)
+                {
+                    appSettings.SavedWindowWidth = Math.Max(MinWidth, ActualWidth);
+                    if (libraryExpanded)
+                    {
+                        appSettings.SavedExpandedHeight = Math.Max(584, ActualHeight);
+                    }
+                    else
+                    {
+                        appSettings.SavedCollapsedHeight = Math.Max(320, Math.Min(420, ActualHeight));
+                    }
+                }
                 if (!appSettings.RememberWindowPosition)
                 {
                     return;
                 }
                 Directory.CreateDirectory(dataDirectory);
-                var collapsedTop = libraryExpanded ? Top + (ExpandedWindowHeight - CollapsedWindowHeight) : Top;
+                var collapsedHeight = Math.Max(320, appSettings.SavedCollapsedHeight);
+                var collapsedTop = libraryExpanded ? Top + Math.Max(0, ActualHeight - collapsedHeight) : Top;
                 File.WriteAllLines(windowPositionFile, new[]
                 {
                     Left.ToString("R", CultureInfo.InvariantCulture),
@@ -3331,39 +3647,153 @@ namespace Kapla
             }
         }
 
-        private void BookmarkButtonOnClick(object sender, RoutedEventArgs e)
+        private UIElement BuildSleepTimerView()
         {
-            if (currentBook == null)
+            var root = new Grid { Margin = new Thickness(2, 5, 2, 0) };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var heading = new Grid();
+            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            heading.Children.Add(FigmaText("Sleep timer", 12, FontWeights.Bold, Brush("#1A1111")));
+            sleepRemainingText = FigmaText("Off", 9, FontWeights.SemiBold, accentBrush);
+            Grid.SetColumn(sleepRemainingText, 1);
+            heading.Children.Add(sleepRemainingText);
+            root.Children.Add(heading);
+
+            var presets = new WrapPanel { Margin = new Thickness(0, 12, 0, 8) };
+            foreach (var minutes in new[] { 5, 10, 15, 30, 45, 60 })
             {
-                return;
+                var value = minutes;
+                var button = MakeCompactActionButton(value + " min", value == appSettings.DefaultSleepMinutes);
+                button.Margin = new Thickness(0, 0, 6, 5);
+                button.Click += delegate { StartSleepTimer(value); };
+                presets.Children.Add(button);
             }
-            if (currentBook.Bookmarks == null)
+            var endChapter = MakeCompactActionButton("End of chapter", false);
+            endChapter.Margin = new Thickness(0, 0, 6, 5);
+            endChapter.IsEnabled = CurrentChapterEndSeconds().HasValue;
+            endChapter.Click += delegate { StartSleepTimerAtChapterEnd(); };
+            presets.Children.Add(endChapter);
+            Grid.SetRow(presets, 1);
+            root.Children.Add(presets);
+
+            var customRow = new StackPanel { Orientation = Orientation.Horizontal };
+            var customMinutes = new TextBox
             {
-                currentBook.Bookmarks = new List<double>();
-            }
-            var position = sourceLoaded
-                ? currentTrackStartSeconds + media.Position.TotalSeconds
-                : currentBook.PositionSeconds;
-            currentBook.Bookmarks.Add(Math.Max(0, position));
-            currentBook.Bookmarks = currentBook.Bookmarks.OrderBy(value => value).ToList();
-            SaveLibrary();
-            bookmarkButton.ToolTip = "Bookmarked " + FormatTime(position) + " (" + currentBook.Bookmarks.Count + " total)";
-            statusText.Text = "Bookmark saved at " + FormatTime(position) + ".";
+                Text = appSettings.DefaultSleepMinutes.ToString(CultureInfo.InvariantCulture),
+                Width = 52,
+                Height = 24,
+                Padding = new Thickness(7, 3, 7, 2),
+                FontFamily = interFont,
+                FontSize = 9,
+                Background = Brush("#AFFFFFFF"),
+                Foreground = Brush("#1A1111"),
+                BorderBrush = Brush("#18A7DDF7"),
+                BorderThickness = new Thickness(1),
+                ToolTip = "Custom minutes"
+            };
+            customRow.Children.Add(customMinutes);
+            var setCustom = MakeCompactActionButton("Set custom", true);
+            setCustom.Margin = new Thickness(6, 0, 0, 0);
+            setCustom.Click += delegate
+            {
+                int minutes;
+                if (Int32.TryParse(customMinutes.Text, out minutes) && minutes > 0 && minutes <= 1440)
+                {
+                    StartSleepTimer(minutes);
+                }
+                else
+                {
+                    statusText.Text = "Enter a duration from 1 to 1440 minutes.";
+                }
+            };
+            customRow.Children.Add(setCustom);
+            sleepCancelButton = MakeCompactActionButton("Cancel timer", false);
+            sleepCancelButton.Margin = new Thickness(6, 0, 0, 0);
+            sleepCancelButton.IsEnabled = sleepTimer.IsActive;
+            sleepCancelButton.Click += delegate { CancelSleepTimer("Sleep timer cancelled."); };
+            customRow.Children.Add(sleepCancelButton);
+            Grid.SetRow(customRow, 2);
+            root.Children.Add(customRow);
+            UpdateSleepTimerUi();
+            return root;
         }
 
         private void SleepTimerButtonOnClick(object sender, RoutedEventArgs e)
         {
-            if (sleepTimerEndUtc.HasValue)
+            EnsureExpanded("sleep");
+        }
+
+        private void StartSleepTimer(int minutes)
+        {
+            minutes = Math.Max(1, Math.Min(1440, minutes));
+            sleepTimer.StartDuration(DateTime.UtcNow, TimeSpan.FromMinutes(minutes));
+            appSettings.DefaultSleepMinutes = minutes;
+            SaveSettings();
+            statusText.Text = "Sleep timer set for " + minutes + " minutes.";
+            UpdateSleepTimerUi();
+        }
+
+        private void StartSleepTimerAtChapterEnd()
+        {
+            var end = CurrentChapterEndSeconds();
+            var position = CurrentAbsolutePosition();
+            if (!end.HasValue || end.Value <= position)
             {
-                sleepTimerEndUtc = null;
-                sleepTimerButton.ToolTip = "Sleep timer";
-                statusText.Text = "Sleep timer turned off.";
+                statusText.Text = "The current chapter has no usable ending.";
                 return;
             }
-            var minutes = Math.Max(1, appSettings.DefaultSleepMinutes);
-            sleepTimerEndUtc = DateTime.UtcNow.AddMinutes(minutes);
-            sleepTimerButton.ToolTip = "Sleep timer: " + minutes + " minutes • click to cancel";
-            statusText.Text = "Sleep timer set for " + minutes + " minutes.";
+            sleepTimer.StartEndOfChapter(end.Value, position);
+            statusText.Text = "Sleep timer set for the end of this chapter.";
+            UpdateSleepTimerUi();
+        }
+
+        private double? CurrentChapterEndSeconds()
+        {
+            if (currentBook == null || currentBook.Chapters == null)
+            {
+                return null;
+            }
+            var position = CurrentAbsolutePosition();
+            var window = PlaybackProgress.Calculate(position, currentBook.DurationSeconds, currentBook.Chapters, PlaybackProgress.ChapterMode);
+            return window.IsChapterRelative ? (double?)window.EndSeconds : null;
+        }
+
+        private double CurrentAbsolutePosition()
+        {
+            return currentBook == null ? 0 : sourceLoaded ? currentTrackStartSeconds + media.Position.TotalSeconds : currentBook.PositionSeconds;
+        }
+
+        private void CancelSleepTimer(string message)
+        {
+            sleepTimer.Cancel();
+            if (!String.IsNullOrWhiteSpace(message) && statusText != null) statusText.Text = message;
+            UpdateSleepTimerUi();
+        }
+
+        private void UpdateSleepTimerUi()
+        {
+            if (sleepTimerButton == null)
+            {
+                return;
+            }
+            if (!sleepTimer.IsActive)
+            {
+                sleepTimerButton.ToolTip = "Sleep timer";
+                if (sleepRemainingText != null) sleepRemainingText.Text = "Off";
+                if (sleepCancelButton != null) sleepCancelButton.IsEnabled = false;
+                return;
+            }
+            var remaining = sleepTimer.Remaining(DateTime.UtcNow, CurrentAbsolutePosition());
+            var label = sleepTimer.Mode == SleepTimerMode.EndOfChapter
+                ? "End of chapter • " + FormatTime(remaining.TotalSeconds)
+                : "Remaining • " + FormatTime(remaining.TotalSeconds);
+            sleepTimerButton.ToolTip = "Sleep timer: " + label;
+            if (sleepRemainingText != null) sleepRemainingText.Text = label;
+            if (sleepCancelButton != null) sleepCancelButton.IsEnabled = true;
         }
 
         private void ShowFigmaPreviewState()
@@ -3466,10 +3896,6 @@ namespace Kapla
                                 if (book.Chapters == null)
                                 {
                                     book.Chapters = new List<KoboChapter>();
-                                }
-                                if (book.Bookmarks == null)
-                                {
-                                    book.Bookmarks = new List<double>();
                                 }
                                 metadataChanged = RefreshLocalBookMetadata(book, false) || metadataChanged;
                                 allBooks.Add(book);
@@ -3587,7 +4013,7 @@ namespace Kapla
             }
         }
 
-        private async Task SyncKoboLibraryAsync()
+        private async Task SyncKoboLibraryAsync(bool showKoboView = true)
         {
             if (koboClient == null || koboSession == null || String.IsNullOrWhiteSpace(koboSession.AccessToken))
             {
@@ -3602,8 +4028,10 @@ namespace Kapla
             {
                 remoteKoboBooks.Add(book);
             }
+            lastKoboLibraryRefreshUtc = DateTime.UtcNow;
             statusText.Text = books.Count == 0 ? "Kobo returned no audiobook titles." : "Kobo library synced: " + books.Count + (books.Count == 1 ? " title." : " titles.");
-            ShowExpandedView("kobo");
+            SetSyncStatus("Synced", null);
+            if (showKoboView) ShowExpandedView("kobo");
         }
 
         private async Task ImportSelectedKoboBookAsync()
@@ -3668,6 +4096,8 @@ namespace Kapla
             koboClient = null;
             koboSession = null;
             pendingKoboActivation = null;
+            koboSyncPending = false;
+            koboLibrarySyncPending = false;
             remoteKoboBooks.Clear();
             KoboSessionStore.Clear(dataDirectory);
             statusText.Text = "Kobo account data cleared from this PC.";
@@ -3828,10 +4258,6 @@ namespace Kapla
             {
                 libraryCount.Text = visibleBooks.Count + (visibleBooks.Count == 1 ? " audiobook" : " audiobooks");
             }
-            if (statusText != null && allBooks.Count > 0)
-            {
-                statusText.Text = "Positions are saved automatically on this PC.";
-            }
         }
 
         private void LibraryListOnSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -3843,6 +4269,10 @@ namespace Kapla
             }
 
             SaveCurrentPosition();
+            if (sleepTimer.IsActive)
+            {
+                CancelSleepTimer("Sleep timer cancelled because the audiobook changed.");
+            }
             currentBook = selected;
             appSettings.LastBookPath = currentBook.Path;
             SaveSettings();
@@ -4116,6 +4546,8 @@ namespace Kapla
                 }
                 positionText.Text = "0:00";
                 durationText.Text = "-0:00";
+                currentProgressWindow = null;
+                progressSlider.Minimum = 0;
                 progressSlider.Maximum = 1;
                 progressSlider.Value = 0;
                 UpdateProgressVisual();
@@ -4161,12 +4593,8 @@ namespace Kapla
                 syncText.Text = "Kobo audiobook";
                 syncDetailText.Text = "Connect Kobo to refresh account progress and audiobook details.";
             }
-            positionText.Text = FormatTime(currentBook.PositionSeconds);
-            durationText.Text = FormatRemaining(currentBook.DurationSeconds - currentBook.PositionSeconds);
-            progressSlider.Maximum = Math.Max(1, currentBook.DurationSeconds);
-            progressSlider.Value = Math.Min(progressSlider.Maximum, Math.Max(0, currentBook.PositionSeconds));
             UpdateChapterSelection(currentBook.PositionSeconds);
-            UpdateProgressVisual();
+            UpdateProgressDisplay(currentBook.PositionSeconds);
             UpdatePlayButtonVisual();
         }
 
@@ -4247,44 +4675,7 @@ namespace Kapla
 
         private void SetPalette(Color selected)
         {
-            accentBrush = Brush(appSettings.AccentColor);
-            Background = Brushes.Transparent;
-            if (windowSurface != null)
-            {
-                windowSurface.Background = Brushes.Transparent;
-            }
-            rootLayout.Background = Brushes.Transparent;
-            librarySurface.Background = Brush("#FDF8F4");
-            headerSurface.Background = Brushes.Transparent;
-            appCard.Background = Brush("#FDF8F4");
-            if (playButton != null)
-            {
-                var playSurface = playButton.Content as Border;
-                if (playSurface != null)
-                {
-                    playSurface.Background = BuildPlayButtonBrush();
-                }
-            }
-            if (progressSlider != null)
-            {
-                progressSlider.Foreground = accentBrush;
-            }
-            if (progressFill != null)
-            {
-                progressFill.Background = accentBrush;
-            }
-            if (progressThumb != null)
-            {
-                progressThumb.Background = accentBrush;
-            }
-            if (playerStateText != null)
-            {
-                playerStateText.Foreground = accentBrush;
-            }
-            if (coverBorder != null)
-            {
-                coverBorder.Background = Brush("#EFE8E8");
-            }
+            ApplyTheme(false);
         }
 
         private static Color Blend(Color color, Color background, double backgroundWeight)
@@ -4387,18 +4778,71 @@ namespace Kapla
                 return;
             }
 
-            positionText.Text = FormatTime(e.NewValue);
-            if (currentBook != null)
+            var preview = PlaybackProgress.Calculate(e.NewValue, currentBook == null ? 0 : currentBook.DurationSeconds,
+                currentBook == null ? null : currentBook.Chapters, appSettings.ProgressDisplayMode);
+            positionText.Text = FormatTime(preview.ElapsedSeconds);
+            durationText.Text = FormatRemaining(preview.RemainingSeconds);
+        }
+
+        private void ProgressSliderOnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            var slider = sender as Slider;
+            if (slider == null || e.ChangedButton != MouseButton.Left)
             {
-                durationText.Text = FormatRemaining(currentBook.DurationSeconds - e.NewValue);
+                return;
             }
+            isDraggingProgress = true;
+            SetSliderFromPointer(slider, e.GetPosition(slider));
+            slider.CaptureMouse();
+            e.Handled = true;
+        }
+
+        private void ProgressSliderOnMouseMove(object sender, MouseEventArgs e)
+        {
+            var slider = sender as Slider;
+            if (!isDraggingProgress || slider == null || e.LeftButton != MouseButtonState.Pressed)
+            {
+                return;
+            }
+            SetSliderFromPointer(slider, e.GetPosition(slider));
+            e.Handled = true;
+        }
+
+        private static void SetSliderFromPointer(Slider slider, Point point)
+        {
+            var width = Math.Max(1, slider.ActualWidth);
+            var ratio = Math.Max(0, Math.Min(1, point.X / width));
+            slider.Value = slider.Minimum + ratio * (slider.Maximum - slider.Minimum);
         }
 
         private void ProgressSliderOnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
+            var slider = sender as Slider;
+            if (slider != null)
+            {
+                SetSliderFromPointer(slider, e.GetPosition(slider));
+                slider.ReleaseMouseCapture();
+            }
             isDraggingProgress = false;
-            SeekToGlobal(progressSlider.Value, isPlaying);
+            SeekToGlobal(PlaybackProgress.ToAbsolute(progressSlider.Value, currentProgressWindow), isPlaying);
             SaveCurrentPosition();
+            e.Handled = true;
+        }
+
+        private void UpdateProgressDisplay(double absoluteSeconds)
+        {
+            if (progressSlider == null || currentBook == null)
+            {
+                return;
+            }
+            currentProgressWindow = PlaybackProgress.Calculate(absoluteSeconds, currentBook.DurationSeconds,
+                currentBook.Chapters, appSettings.ProgressDisplayMode);
+            progressSlider.Minimum = currentProgressWindow.StartSeconds;
+            progressSlider.Maximum = Math.Max(currentProgressWindow.StartSeconds + 0.001, currentProgressWindow.EndSeconds);
+            progressSlider.Value = Math.Max(progressSlider.Minimum, Math.Min(progressSlider.Maximum, absoluteSeconds));
+            positionText.Text = FormatTime(currentProgressWindow.ElapsedSeconds);
+            durationText.Text = FormatRemaining(currentProgressWindow.RemainingSeconds);
+            UpdateProgressVisual();
         }
 
         private void SeekToGlobal(double target, bool resume)
@@ -4418,10 +4862,8 @@ namespace Kapla
                 media.Position = TimeSpan.FromSeconds(local);
                 currentBook.PositionSeconds = target;
                 currentBook.Finished = false;
-                positionText.Text = FormatTime(target);
-                progressSlider.Value = target;
-                durationText.Text = FormatRemaining(currentBook.DurationSeconds - target);
                 UpdateChapterSelection(target);
+                UpdateProgressDisplay(target);
                 SaveCurrentPosition();
                 return;
             }
@@ -4431,21 +4873,18 @@ namespace Kapla
             pendingTrackPositionSeconds = local;
             currentBook.PositionSeconds = target;
             currentBook.Finished = false;
-            progressSlider.Value = target;
-            positionText.Text = FormatTime(target);
-            durationText.Text = FormatRemaining(currentBook.DurationSeconds - target);
+            UpdateChapterSelection(target);
+            UpdateProgressDisplay(target);
             sourceLoaded = false;
             media.Stop();
             media.Source = null;
             LoadSource(resume);
-            UpdateChapterSelection(target);
         }
 
         private void ProgressTimerOnTick(object sender, EventArgs e)
         {
-            if (sleepTimerEndUtc.HasValue && DateTime.UtcNow >= sleepTimerEndUtc.Value)
+            if (sleepTimer.IsActive && sleepTimer.HasExpired(DateTime.UtcNow, CurrentAbsolutePosition()))
             {
-                sleepTimerEndUtc = null;
                 if (isPlaying)
                 {
                     media.Pause();
@@ -4453,8 +4892,11 @@ namespace Kapla
                     UpdatePlayButtonVisual();
                     SaveCurrentPosition();
                 }
-                sleepTimerButton.ToolTip = "Sleep timer";
-                statusText.Text = "Sleep timer finished.";
+                CancelSleepTimer("Sleep timer finished.");
+            }
+            else if (sleepTimer.IsActive)
+            {
+                UpdateSleepTimerUi();
             }
             if (currentBook == null || !sourceLoaded || isDraggingProgress)
             {
@@ -4476,18 +4918,21 @@ namespace Kapla
 
             currentBook.PositionSeconds = seconds;
             currentBook.LastPlayedUtc = DateTime.UtcNow;
-            positionText.Text = FormatTime(seconds);
             if (currentBook.DurationSeconds > 0)
             {
-                progressSlider.Maximum = Math.Max(1, currentBook.DurationSeconds);
-                progressSlider.Value = Math.Min(progressSlider.Maximum, seconds);
-                durationText.Text = FormatRemaining(currentBook.DurationSeconds - seconds);
+                UpdateChapterSelection(seconds);
+                UpdateProgressDisplay(seconds);
             }
-            UpdateChapterSelection(seconds);
 
             if (appSettings.RememberPlaybackPosition && (DateTime.UtcNow - lastSaveUtc).TotalSeconds >= 5)
             {
                 SaveLibrary();
+            }
+            if (!String.IsNullOrWhiteSpace(currentBook.KoboRevisionId)
+                && KoboSyncPolicy.IsMeaningfulProgress(seconds, lastQueuedKoboPosition, 30))
+            {
+                lastQueuedKoboPosition = seconds;
+                QueueKoboSynchronization(false, false);
             }
         }
 
@@ -4511,34 +4956,101 @@ namespace Kapla
             {
                 return;
             }
-            if ((DateTime.UtcNow - lastKoboSyncUtc).TotalSeconds < 30)
+            QueueKoboSynchronization(false, false);
+        }
+
+        private void QueueKoboSynchronization(bool includeLibrary, bool immediate)
+        {
+            if (koboClient == null || koboSession == null || String.IsNullOrWhiteSpace(koboSession.AccessToken))
             {
                 return;
             }
-
-            var revisionId = currentBook.KoboRevisionId;
-            var position = currentBook.PositionSeconds;
-            var duration = currentBook.DurationSeconds;
-            lastKoboSyncUtc = DateTime.UtcNow;
-            Task.Run(async delegate
+            koboSyncPending = true;
+            koboLibrarySyncPending = koboLibrarySyncPending || includeLibrary;
+            var requested = immediate ? DateTime.UtcNow : DateTime.UtcNow.AddSeconds(20);
+            if (nextKoboSyncAttemptUtc == DateTime.MaxValue || requested < nextKoboSyncAttemptUtc)
             {
-                try
+                nextKoboSyncAttemptUtc = requested;
+            }
+            SetSyncStatus(NetworkInterface.GetIsNetworkAvailable() ? "Sync pending" : "Offline", null);
+        }
+
+        private async Task ProcessKoboSyncQueueAsync()
+        {
+            if (koboClient != null && (DateTime.UtcNow - lastKoboLibraryRefreshUtc).TotalMinutes >= 10)
+            {
+                QueueKoboSynchronization(true, false);
+            }
+            if (!koboSyncPending || koboSyncInProgress || DateTime.UtcNow < nextKoboSyncAttemptUtc || koboClient == null || koboSession == null)
+            {
+                return;
+            }
+            if (!NetworkInterface.GetIsNetworkAvailable())
+            {
+                SetSyncStatus("Offline", "Progress is saved locally and will retry when the network returns.");
+                nextKoboSyncAttemptUtc = DateTime.UtcNow.AddSeconds(15);
+                return;
+            }
+
+            koboSyncInProgress = true;
+            var refreshLibrary = koboLibrarySyncPending;
+            koboSyncPending = false;
+            koboLibrarySyncPending = false;
+            var revisionId = currentBook == null ? null : currentBook.KoboRevisionId;
+            var position = currentBook == null ? 0 : currentBook.PositionSeconds;
+            var duration = currentBook == null ? 0 : currentBook.DurationSeconds;
+            SetSyncStatus("Syncing", null);
+            try
+            {
+                if (refreshLibrary)
                 {
-                    await koboClient.UpdateProgressAsync(revisionId, position, duration).ConfigureAwait(false);
-                    var ignored = Dispatcher.BeginInvoke(new Action(delegate
-                    {
-                        syncText.Text = "Kobo synced • " + FormatTime(position);
-                        KoboSessionStore.Save(dataDirectory, koboSession);
-                    }));
+                    await SyncKoboLibraryAsync(false);
                 }
-                catch
+                if (!String.IsNullOrWhiteSpace(revisionId) && duration > 0)
                 {
-                    var ignored = Dispatcher.BeginInvoke(new Action(delegate
-                    {
-                        syncText.Text = "Kobo linked • sync pending";
-                    }));
+                    await koboClient.UpdateProgressAsync(revisionId, position, duration);
                 }
-            });
+                KoboSessionStore.Save(dataDirectory, koboSession);
+                lastKoboSyncUtc = DateTime.UtcNow;
+                koboSyncFailures = 0;
+                nextKoboSyncAttemptUtc = DateTime.MaxValue;
+                SetSyncStatus("Synced", String.IsNullOrWhiteSpace(revisionId) ? null : FormatTime(position));
+            }
+            catch (Exception ex)
+            {
+                koboSyncFailures = Math.Min(6, koboSyncFailures + 1);
+                var delay = KoboSyncPolicy.RetryDelay(koboSyncFailures);
+                koboSyncPending = true;
+                koboLibrarySyncPending = refreshLibrary;
+                nextKoboSyncAttemptUtc = DateTime.UtcNow.Add(delay);
+                SetSyncStatus(NetworkInterface.GetIsNetworkAvailable() ? "Sync error" : "Offline", DescribeKoboError(ex));
+            }
+            finally
+            {
+                koboSyncInProgress = false;
+            }
+        }
+
+        private void SetSyncStatus(string status, string detail)
+        {
+            if (headerSyncText != null) headerSyncText.Text = koboClient == null ? String.Empty : status;
+            if (syncText != null) syncText.Text = koboClient == null ? "Kobo account" : "Kobo " + status.ToLowerInvariant();
+            if (syncDetailText != null && !String.IsNullOrWhiteSpace(detail)) syncDetailText.Text = detail;
+        }
+
+        private void NetworkAvailabilityChanged(object sender, NetworkAvailabilityEventArgs e)
+        {
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                if (e.IsAvailable)
+                {
+                    QueueKoboSynchronization(true, true);
+                }
+                else
+                {
+                    SetSyncStatus("Offline", "Progress is saved locally.");
+                }
+            }));
         }
 
         private void MediaOnMediaOpened(object sender, RoutedEventArgs e)
@@ -4605,12 +5117,11 @@ namespace Kapla
             currentBook.Finished = true;
             isPlaying = false;
             UpdatePlayButtonVisual();
-            positionText.Text = FormatTime(currentBook.PositionSeconds);
-            durationText.Text = "-0:00";
-            progressSlider.Value = progressSlider.Maximum;
+            UpdateChapterSelection(currentBook.PositionSeconds);
+            UpdateProgressDisplay(currentBook.PositionSeconds);
             SaveLibrary();
             RefreshVisibleBooks();
-            ScheduleKoboProgressSync();
+            QueueKoboSynchronization(false, true);
         }
 
         private void MediaOnMediaFailed(object sender, ExceptionRoutedEventArgs e)
