@@ -38,7 +38,6 @@ namespace Kapla
         public string Description { get; set; }
         public List<KoboTrack> Tracks { get; set; }
         public List<KoboChapter> Chapters { get; set; }
-        public List<double> Bookmarks { get; set; }
 
         public BookEntry()
         {
@@ -46,7 +45,6 @@ namespace Kapla
             Author = "Unknown author";
             Tracks = new List<KoboTrack>();
             Chapters = new List<KoboChapter>();
-            Bookmarks = new List<double>();
             LastPlayedUtc = DateTime.UtcNow;
         }
 
@@ -110,6 +108,12 @@ namespace Kapla
         public string AccentColor { get; set; }
         public bool AnimationsEnabled { get; set; }
         public bool ReduceMotion { get; set; }
+        public bool RememberWindowSize { get; set; }
+        public double SavedWindowWidth { get; set; }
+        public double SavedCollapsedHeight { get; set; }
+        public double SavedExpandedHeight { get; set; }
+        public bool ShowCoverArtwork { get; set; }
+        public string ProgressDisplayMode { get; set; }
         public string LastBookPath { get; set; }
 
         public AppSettings()
@@ -129,6 +133,12 @@ namespace Kapla
             AppearanceMode = "Light";
             AccentColor = "#7DD3FC";
             AnimationsEnabled = true;
+            RememberWindowSize = true;
+            SavedWindowWidth = 608;
+            SavedCollapsedHeight = 352;
+            SavedExpandedHeight = 584;
+            ShowCoverArtwork = true;
+            ProgressDisplayMode = PlaybackProgress.ChapterMode;
         }
     }
 

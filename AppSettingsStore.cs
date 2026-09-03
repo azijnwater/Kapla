@@ -50,6 +50,22 @@ namespace Kapla
                     {
                         value.AccentColor = "#7DD3FC";
                     }
+                    if (value.SavedWindowWidth < 420 || value.SavedWindowWidth > 2400)
+                    {
+                        value.SavedWindowWidth = 608;
+                    }
+                    if (value.SavedCollapsedHeight < 320 || value.SavedCollapsedHeight > 420)
+                    {
+                        value.SavedCollapsedHeight = 352;
+                    }
+                    if (value.SavedExpandedHeight < 584 || value.SavedExpandedHeight > 1800)
+                    {
+                        value.SavedExpandedHeight = 584;
+                    }
+                    if (String.IsNullOrWhiteSpace(value.ProgressDisplayMode))
+                    {
+                        value.ProgressDisplayMode = PlaybackProgress.ChapterMode;
+                    }
                     return value;
                 }
             }
