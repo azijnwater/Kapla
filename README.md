@@ -4,7 +4,7 @@
 
 <h1 align="center">Kapla</h1>
 
-<p align="center"><strong>Your audiobooks. Your desktop. No browser bloat.</strong></p>
+<p align="center"><strong>Your audiobooks. Your desktop. </strong></p>
 
 <p align="center">
   A tiny, native Windows audiobook player for authorized Kobo audiobooks, built to sit quietly on your desktop while you listen.
