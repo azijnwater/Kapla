@@ -1,6 +1,5 @@
-<p align="center">
-  <img src="docs/kapla-window.png" alt="Kapla audiobook player" width="620">
-</p>
+<p align="center"><img src="docs/kapla-window.pnge" width="620" ></p>
+<h1 align="center">Kapla</h1>
 
 <h1 align="center">Kapla</h1>
 
