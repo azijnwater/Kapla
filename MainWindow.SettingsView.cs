@@ -85,11 +85,13 @@ namespace Kapla
 
         private void SetSettingsCategoryState(Button button, bool active)
         {
-            button.Background = active ? accentSoftBrush : Brushes.Transparent;
+            button.Background = active
+                ? WithOpacity(accentBrush.Color, IsDarkTheme ? 0.34 : 0.24)
+                : Brushes.Transparent;
             button.BorderBrush = active ? accentBrush : Brushes.Transparent;
-            button.BorderThickness = new Thickness(1.25);
+            button.BorderThickness = active ? new Thickness(1.5) : new Thickness(1.25);
             button.Foreground = active
-                ? (IsDarkTheme ? Brush("#8DD3FF") : Brush("#285D78"))
+                ? (IsDarkTheme ? Brush("#BCE8FF") : Brush("#17384A"))
                 : (IsDarkTheme ? Brush("#AAB3BD") : Brush("#8A7E7A"));
         }
 
@@ -146,7 +148,20 @@ namespace Kapla
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 5)
             });
-            var purge = MakeCompactActionButton("Purge all local data", false, "x-lg.svg");
+            var purge = MakeCompactActionButton("Purge all local data", false);
+            var purgeContent = new StackPanel { Orientation = Orientation.Horizontal };
+            purgeContent.Children.Add(BuildBootstrapIcon("x-lg.svg", 10, false));
+            purgeContent.Children.Add(new TextBlock
+            {
+                Text = "Purge all local data",
+                FontFamily = interFont,
+                FontSize = 9.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Brush("#B04C4C"),
+                Margin = new Thickness(5, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            purge.Content = purgeContent;
             purge.Height = 24;
             purge.HorizontalAlignment = HorizontalAlignment.Left;
             purge.Foreground = Brush("#B04C4C");
