@@ -123,6 +123,7 @@ namespace Kapla
         private BookEntry previewBook;
         private bool isDraggingProgress;
         private bool sourceLoaded;
+        private bool sourceLoadPending;
         private bool applyingResumePosition;
         private bool isPlaying;
         private bool playWhenSourceReady;

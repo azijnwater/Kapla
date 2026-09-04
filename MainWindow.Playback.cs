@@ -101,6 +101,7 @@ namespace Kapla
 
             sourceLoaded = false;
             isPlaying = false;
+            sourceLoadPending = true;
             playWhenSourceReady = playWhenReady;
             media.Source = new Uri(ResolvePlayablePath(trackPath), UriKind.Absolute);
             UpdateWindowsMediaPlaybackState();
@@ -116,7 +117,11 @@ namespace Kapla
 
             if (!sourceLoaded)
             {
-                LoadSource(true);
+                playWhenSourceReady = true;
+                if (!sourceLoadPending)
+                {
+                    LoadSource(true);
+                }
                 return;
             }
 
@@ -162,7 +167,11 @@ namespace Kapla
 
             if (!sourceLoaded)
             {
-                LoadSource(true);
+                playWhenSourceReady = true;
+                if (!sourceLoadPending)
+                {
+                    LoadSource(true);
+                }
                 return;
             }
 
@@ -628,6 +637,7 @@ namespace Kapla
                 if (currentBook != openedBook || currentTrackIndex != openedTrack || media == null)
                 {
                     applyingResumePosition = false;
+                    sourceLoadPending = false;
                     return;
                 }
                 if (openedTrack >= 0 && openedTrack < playbackTracks.Count && media.NaturalDuration.HasTimeSpan)
@@ -648,6 +658,7 @@ namespace Kapla
                     if (currentBook != openedBook || currentTrackIndex != openedTrack || media == null)
                     {
                         applyingResumePosition = false;
+                        sourceLoadPending = false;
                         return;
                     }
                     media.Position = TimeSpan.FromSeconds(start);
@@ -656,7 +667,8 @@ namespace Kapla
                     currentBook.PositionSeconds = currentTrackStartSeconds + start;
                     applyingResumePosition = false;
                     sourceLoaded = true;
-                    if (shouldPlay)
+                    sourceLoadPending = false;
+                    if (shouldPlay || playWhenSourceReady)
                     {
                         media.Play();
                         isPlaying = true;
@@ -708,6 +720,7 @@ namespace Kapla
         private void MediaOnMediaFailed(object sender, ExceptionRoutedEventArgs e)
         {
             sourceLoaded = false;
+            sourceLoadPending = false;
             isPlaying = false;
             playWhenSourceReady = false;
             UpdatePlayButtonVisual();
