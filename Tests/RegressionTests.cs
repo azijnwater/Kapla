@@ -89,6 +89,9 @@ namespace Kapla.Tests
             CheckEqual("exact chapter boundary maps forward", 1, PlaybackTimeline.FindTrack(tracks, 10));
             CheckEqual("second boundary maps forward", 2, PlaybackTimeline.FindTrack(tracks, 30));
             CheckEqual("end maps to final track", 2, PlaybackTimeline.FindTrack(tracks, 60));
+            CheckEqual("negative position maps to first track", 0, PlaybackTimeline.FindTrack(tracks, -10));
+            CheckEqual("NaN position maps to first track", 0, PlaybackTimeline.FindTrack(tracks, Double.NaN));
+            CheckEqual("missing timeline has zero duration", 0.0, PlaybackTimeline.TotalDuration(null));
             var chapters = new List<KoboChapter>
             {
                 new KoboChapter { Title = "Chapter One", StartSeconds = 0, EndSeconds = 10 },
@@ -100,6 +103,15 @@ namespace Kapla.Tests
             CheckEqual("chapter correction preserves title", "Chapter Two", chapters[1].Title);
             CheckEqual("chapter correction updates third start", 35.0, chapters[2].StartSeconds);
             CheckEqual("chapter correction updates final end", 65.0, chapters[2].EndSeconds);
+
+            var chaptersWithGap = new List<KoboChapter>
+            {
+                new KoboChapter(),
+                null,
+                new KoboChapter()
+            };
+            PlaybackTimeline.AlignChapters(chaptersWithGap, tracks);
+            CheckEqual("missing chapter does not shift later chapter", 35.0, chaptersWithGap[2].StartSeconds);
 
             var chapterWindow = PlaybackProgress.Calculate(16, 65, chapters, PlaybackProgress.ChapterMode);
             Check("chapter progress selected", chapterWindow.IsChapterRelative);
@@ -117,6 +129,10 @@ namespace Kapla.Tests
 
             var fallbackWindow = PlaybackProgress.Calculate(16, 65, new List<KoboChapter>(), PlaybackProgress.ChapterMode);
             Check("chapter progress falls back without chapters", !fallbackWindow.IsChapterRelative);
+            CheckEqual("negative playback position is clamped", 0.0, PlaybackProgress.Calculate(-5, 65, chapters, PlaybackProgress.BookMode).AbsoluteSeconds);
+            CheckEqual("past-end playback position is clamped", 65.0, PlaybackProgress.Calculate(100, 65, chapters, PlaybackProgress.BookMode).AbsoluteSeconds);
+            CheckEqual("invalid playback values recover safely", 0.0, PlaybackProgress.Calculate(Double.NaN, Double.PositiveInfinity, chapters, PlaybackProgress.BookMode).AbsoluteSeconds);
+            CheckEqual("invalid slider value recovers safely", chapterWindow.StartSeconds, PlaybackProgress.ToAbsolute(Double.NaN, chapterWindow));
         }
 
         private static void SleepTimerTests()
@@ -140,11 +156,17 @@ namespace Kapla.Tests
             Check("first Kobo progress queues", KoboSyncPolicy.IsMeaningfulProgress(10, -1, 30));
             Check("small Kobo progress is debounced", !KoboSyncPolicy.IsMeaningfulProgress(35, 10, 30));
             Check("meaningful Kobo progress queues", KoboSyncPolicy.IsMeaningfulProgress(40, 10, 30));
+            Check("meaningful rewind queues", KoboSyncPolicy.IsMeaningfulProgress(60, 100, 30));
+            Check("invalid Kobo progress is ignored", !KoboSyncPolicy.IsMeaningfulProgress(Double.NaN, 10, 30));
+            Check("negative Kobo progress is ignored", !KoboSyncPolicy.IsMeaningfulProgress(-1, 10, 30));
+            Check("Kobo progress threshold has a one-second floor", !KoboSyncPolicy.IsMeaningfulProgress(10.5, 10, 0));
             CheckEqual("first retry delay", TimeSpan.FromSeconds(5), KoboSyncPolicy.RetryDelay(1));
+            CheckEqual("nonpositive failure count uses first retry delay", TimeSpan.FromSeconds(5), KoboSyncPolicy.RetryDelay(0));
             CheckEqual("retry delay grows", TimeSpan.FromSeconds(40), KoboSyncPolicy.RetryDelay(4));
             CheckEqual("retry delay is bounded", TimeSpan.FromSeconds(160), KoboSyncPolicy.RetryDelay(20));
             CheckEqual("entitlement id is preferred for progress", "entitlement", KoboSyncPolicy.PreferredProgressId("entitlement", "revision"));
             CheckEqual("revision id remains a migration fallback", "revision", KoboSyncPolicy.PreferredProgressId(null, "revision"));
+            CheckEqual("blank entitlement id uses revision fallback", "revision", KoboSyncPolicy.PreferredProgressId("  ", "revision"));
         }
 
         private static void KoboEndpointSecurityTests()
@@ -209,6 +231,31 @@ namespace Kapla.Tests
             var repaired = AppSettingsStore.Load(path);
             CheckEqual("corrupt settings recover default speed", 1.0, repaired.DefaultPlaybackSpeed);
             CheckEqual("corrupt settings recover default rewind", 15, repaired.RewindSeconds);
+
+            var invalidPath = TempPath(root, "invalid-settings.json");
+            AppSettingsStore.Save(invalidPath, new AppSettings
+            {
+                DefaultPlaybackSpeed = 0,
+                RewindSeconds = 0,
+                ForwardSeconds = -1,
+                DefaultSleepMinutes = 0,
+                Volume = 2,
+                LibraryFolders = null,
+                AppearanceMode = "Sepia",
+                ProgressDisplayMode = "Unknown"
+            });
+            var normalized = AppSettingsStore.Load(invalidPath);
+            CheckEqual("invalid settings recover default speed", 1.0, normalized.DefaultPlaybackSpeed);
+            CheckEqual("invalid settings recover default rewind", 15, normalized.RewindSeconds);
+            CheckEqual("invalid settings recover default forward skip", 15, normalized.ForwardSeconds);
+            CheckEqual("invalid settings recover default sleep timer", 30, normalized.DefaultSleepMinutes);
+            CheckEqual("invalid settings recover default volume", 0.9, normalized.Volume);
+            CheckEqual("missing settings folders recover empty collection", 0, normalized.LibraryFolders.Count);
+            CheckEqual("invalid settings theme recovers light", "Light", normalized.AppearanceMode);
+            CheckEqual("invalid progress mode recovers chapter mode", PlaybackProgress.ChapterMode, normalized.ProgressDisplayMode);
+
+            var missing = AppSettingsStore.Load(TempPath(root, "missing-settings.json"));
+            CheckEqual("missing settings use default speed", 1.0, missing.DefaultPlaybackSpeed);
         }
 
         private static void MetadataTests(string root)
@@ -227,6 +274,9 @@ namespace Kapla.Tests
             Check("malformed metadata returns chapter collection", missingArt.Chapters != null);
             var book = new BookEntry { Title = "Fallback", PositionSeconds = 12, DurationSeconds = 20 };
             CheckEqual("book progress fallback", "Resume at 0:12", book.ProgressText);
+            CheckEqual("book time left", "Time left 0:08", book.TimeLeftText);
+            book.Finished = true;
+            CheckEqual("finished book time left", "No time left", book.TimeLeftText);
             Check("missing cover source falls back safely", String.IsNullOrWhiteSpace(book.CoverSource));
         }
 
@@ -277,6 +327,7 @@ namespace Kapla.Tests
                         Author = "Author",
                         KoboEntitlementId = "entitlement-id",
                         PositionSeconds = 42,
+                        HasLocalPlaybackPosition = true,
                         Tracks = new List<KoboTrack> { new KoboTrack { Path = "book.mp3", DurationSeconds = 100 } },
                         Chapters = new List<KoboChapter> { new KoboChapter { Title = "Start", StartSeconds = 0, EndSeconds = 100 } }
                     }
@@ -288,6 +339,7 @@ namespace Kapla.Tests
             using (var stream = File.OpenRead(path)) loaded = serializer.ReadObject(stream) as LibraryStore;
             CheckEqual("library book round-trip", 1, loaded.Books.Count);
             CheckEqual("library position round-trip", 42.0, loaded.Books[0].PositionSeconds);
+            Check("library local-position marker round-trip", loaded.Books[0].HasLocalPlaybackPosition);
             CheckEqual("library entitlement round-trip", "entitlement-id", loaded.Books[0].KoboEntitlementId);
             CheckEqual("library chapter round-trip", "Start", loaded.Books[0].Chapters[0].Title);
 

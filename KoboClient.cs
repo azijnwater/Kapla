@@ -474,11 +474,17 @@ namespace Kapla
             bookmark["ProgressPercent"] = percent;
             bookmark["ContentSourceProgressPercent"] = percent;
             bookmark["LastModified"] = timestamp;
+            if (!bookmark.ContainsKey("Location"))
+            {
+                bookmark["Location"] = null;
+            }
             var statistics = GetValue(currentState, "Statistics") as Dictionary<string, object> ?? new Dictionary<string, object>();
             statistics["LastModified"] = timestamp;
+            statistics["SpentReadingMinutes"] = (int)Math.Floor(Math.Max(0, positionSeconds) / 60);
+            statistics["RemainingTimeMinutes"] = (int)Math.Ceiling(Math.Max(0, durationSeconds - positionSeconds) / 60);
             var statusInfo = GetValue(currentState, "StatusInfo") as Dictionary<string, object> ?? new Dictionary<string, object>();
             statusInfo["LastModified"] = timestamp;
-            statusInfo["Status"] = percent >= 99 ? "Finished" : "Reading";
+            statusInfo["Status"] = percent >= 99 ? "Finished" : percent <= 0 ? "ReadyToRead" : "Reading";
             var state = new Dictionary<string, object>
             {
                 {

@@ -6,7 +6,18 @@ namespace Kapla
     {
         public static bool IsMeaningfulProgress(double currentSeconds, double lastQueuedSeconds, double thresholdSeconds)
         {
-            return lastQueuedSeconds < 0 || Math.Abs(currentSeconds - lastQueuedSeconds) >= Math.Max(1, thresholdSeconds);
+            if (Double.IsNaN(currentSeconds) || Double.IsInfinity(currentSeconds) || currentSeconds < 0)
+            {
+                return false;
+            }
+            if (Double.IsNaN(lastQueuedSeconds) || Double.IsInfinity(lastQueuedSeconds) || lastQueuedSeconds < 0)
+            {
+                return true;
+            }
+            var threshold = Double.IsNaN(thresholdSeconds) || Double.IsInfinity(thresholdSeconds)
+                ? 1
+                : Math.Max(1, thresholdSeconds);
+            return Math.Abs(currentSeconds - lastQueuedSeconds) >= threshold;
         }
 
         public static TimeSpan RetryDelay(int failureCount)

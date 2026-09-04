@@ -21,6 +21,8 @@ namespace Kapla
     {
         [OptionalField]
         private string koboEntitlementId;
+        [OptionalField]
+        private bool hasLocalPlaybackPosition;
 
         public string Path { get; set; }
         public string Title { get; set; }
@@ -37,6 +39,11 @@ namespace Kapla
         public string KoboProductId { get; set; }
         public double KoboProgressPercent { get; set; }
         public double PositionSeconds { get; set; }
+        public bool HasLocalPlaybackPosition
+        {
+            get { return hasLocalPlaybackPosition; }
+            set { hasLocalPlaybackPosition = value; }
+        }
         public double DurationSeconds { get; set; }
         public bool Finished { get; set; }
         public DateTime LastPlayedUtc { get; set; }
@@ -72,6 +79,22 @@ namespace Kapla
                 }
 
                 return "Not started";
+            }
+        }
+
+        public string TimeLeftText
+        {
+            get
+            {
+                if (Finished)
+                {
+                    return "No time left";
+                }
+                if (DurationSeconds <= 0)
+                {
+                    return "Time left unavailable";
+                }
+                return "Time left " + FormatTime(Math.Max(0, DurationSeconds - PositionSeconds));
             }
         }
 

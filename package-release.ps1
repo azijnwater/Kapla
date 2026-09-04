@@ -21,6 +21,7 @@ Copy-Item (Join-Path $projectRoot "outputs\Kapla.exe") $stageDirectory
 Copy-Item (Join-Path $projectRoot "outputs\Launch-Kapla.cmd") $stageDirectory
 Copy-Item (Join-Path $projectRoot "outputs\README.md") $stageDirectory
 Copy-Item (Join-Path $projectRoot "outputs\Assets") $stageDirectory -Recurse
+Copy-Item (Join-Path $projectRoot "outputs\docs") $stageDirectory -Recurse
 if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $stageDirectory "*") -DestinationPath $zipPath -CompressionLevel Optimal
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()

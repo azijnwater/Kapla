@@ -20,6 +20,16 @@ namespace Kapla
 
         public static Viewbox Load(string fileName, double width, double height)
         {
+            return Load("Figma", fileName, width, height, null);
+        }
+
+        public static Viewbox LoadTinted(string folderName, string fileName, double width, double height, Color tint)
+        {
+            return Load(folderName, fileName, width, height, tint);
+        }
+
+        private static Viewbox Load(string folderName, string fileName, double width, double height, Color? tint)
+        {
             var viewbox = new Viewbox
             {
                 Width = width,
@@ -29,7 +39,7 @@ namespace Kapla
                 IsHitTestVisible = false
             };
 
-            var filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "Figma", fileName);
+            var filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", folderName, fileName);
             if (!File.Exists(filePath))
             {
                 viewbox.Child = new Canvas { Width = width, Height = height };
@@ -51,13 +61,13 @@ namespace Kapla
 
             if (svg != null)
             {
-                AddElements(svg, canvas);
+                AddElements(svg, canvas, tint);
             }
             viewbox.Child = canvas;
             return viewbox;
         }
 
-        private static void AddElements(XmlNode parent, Canvas canvas)
+        private static void AddElements(XmlNode parent, Canvas canvas, Color? tint)
         {
             foreach (XmlNode node in parent.ChildNodes)
             {
@@ -75,20 +85,20 @@ namespace Kapla
 
                 if (String.Equals(element.LocalName, "path", StringComparison.OrdinalIgnoreCase))
                 {
-                    AddPath(element, canvas);
+                    AddPath(element, canvas, tint);
                 }
                 else if (String.Equals(element.LocalName, "circle", StringComparison.OrdinalIgnoreCase))
                 {
-                    AddCircle(element, canvas);
+                    AddCircle(element, canvas, tint);
                 }
                 else
                 {
-                    AddElements(element, canvas);
+                    AddElements(element, canvas, tint);
                 }
             }
         }
 
-        private static void AddPath(XmlElement element, Canvas canvas)
+        private static void AddPath(XmlElement element, Canvas canvas, Color? tint)
         {
             var data = element.GetAttribute("d");
             if (String.IsNullOrWhiteSpace(data))
@@ -99,8 +109,8 @@ namespace Kapla
             var shape = new System.Windows.Shapes.Path
             {
                 Data = Geometry.Parse(data),
-                Fill = Paint(element, "fill", "fill-opacity"),
-                Stroke = Paint(element, "stroke", "stroke-opacity"),
+                Fill = Paint(element, "fill", "fill-opacity", tint),
+                Stroke = Paint(element, "stroke", "stroke-opacity", tint),
                 StrokeThickness = ParseNumber(element.GetAttribute("stroke-width"), 1),
                 StrokeLineJoin = PenLineJoin.Round,
                 IsHitTestVisible = false
@@ -113,7 +123,7 @@ namespace Kapla
             canvas.Children.Add(shape);
         }
 
-        private static void AddCircle(XmlElement element, Canvas canvas)
+        private static void AddCircle(XmlElement element, Canvas canvas, Color? tint)
         {
             var radius = ParseNumber(element.GetAttribute("r"), 0);
             var centerX = ParseNumber(element.GetAttribute("cx"), 0);
@@ -122,8 +132,8 @@ namespace Kapla
             {
                 Width = radius * 2,
                 Height = radius * 2,
-                Fill = Paint(element, "fill", "fill-opacity"),
-                Stroke = Paint(element, "stroke", "stroke-opacity"),
+                Fill = Paint(element, "fill", "fill-opacity", tint),
+                Stroke = Paint(element, "stroke", "stroke-opacity", tint),
                 StrokeThickness = ParseNumber(element.GetAttribute("stroke-width"), 1),
                 IsHitTestVisible = false
             };
@@ -132,7 +142,7 @@ namespace Kapla
             canvas.Children.Add(circle);
         }
 
-        private static Brush Paint(XmlElement element, string colorAttribute, string opacityAttribute)
+        private static Brush Paint(XmlElement element, string colorAttribute, string opacityAttribute, Color? tint)
         {
             var value = element.GetAttribute(colorAttribute);
             if (String.IsNullOrWhiteSpace(value) || String.Equals(value, "none", StringComparison.OrdinalIgnoreCase))
@@ -141,6 +151,11 @@ namespace Kapla
             }
 
             Color color;
+            if (tint.HasValue)
+            {
+                color = tint.Value;
+                return new SolidColorBrush(color);
+            }
             if (String.Equals(value, "white", StringComparison.OrdinalIgnoreCase))
             {
                 color = Colors.White;

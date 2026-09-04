@@ -64,4 +64,7 @@ Copy-Item (Join-Path $projectRoot "Launch-Kapla.cmd") $outputDirectory -Force
 $outputAssets = Join-Path $outputDirectory "Assets"
 if (Test-Path $outputAssets) { Remove-Item -LiteralPath $outputAssets -Recurse -Force }
 Copy-Item (Join-Path $projectRoot "Assets") $outputDirectory -Recurse -Force
+$outputDocs = Join-Path $outputDirectory "docs"
+if (Test-Path $outputDocs) { Remove-Item -LiteralPath $outputDocs -Recurse -Force }
+Copy-Item (Join-Path $projectRoot "docs") $outputDirectory -Recurse -Force
 Write-Output "Built $outputFile"

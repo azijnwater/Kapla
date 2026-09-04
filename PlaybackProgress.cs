@@ -22,8 +22,9 @@ namespace Kapla
 
         public static PlaybackProgressWindow Calculate(double absoluteSeconds, double bookDurationSeconds, IList<KoboChapter> chapters, string mode)
         {
-            var bookEnd = Math.Max(0, bookDurationSeconds);
-            var absolute = Math.Max(0, bookEnd > 0 ? Math.Min(bookEnd, absoluteSeconds) : absoluteSeconds);
+            var bookEnd = FiniteNonNegative(bookDurationSeconds);
+            var requestedAbsolute = FiniteNonNegative(absoluteSeconds);
+            var absolute = bookEnd > 0 ? Math.Min(bookEnd, requestedAbsolute) : requestedAbsolute;
             var result = new PlaybackProgressWindow
             {
                 StartSeconds = 0,
@@ -61,11 +62,19 @@ namespace Kapla
 
         public static double ToAbsolute(double sliderValue, PlaybackProgressWindow window)
         {
+            var value = FiniteNonNegative(sliderValue);
             if (window == null)
             {
-                return Math.Max(0, sliderValue);
+                return value;
             }
-            return Math.Max(window.StartSeconds, Math.Min(window.EndSeconds, sliderValue));
+            var start = FiniteNonNegative(window.StartSeconds);
+            var end = Math.Max(start, FiniteNonNegative(window.EndSeconds));
+            return Math.Max(start, Math.Min(end, value));
+        }
+
+        private static double FiniteNonNegative(double value)
+        {
+            return Double.IsNaN(value) || Double.IsInfinity(value) ? 0 : Math.Max(0, value);
         }
     }
 }

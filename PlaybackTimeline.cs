@@ -67,17 +67,16 @@ namespace Kapla
             {
                 var duration = DurationOf(tracks[index]);
                 var chapter = chapters[index];
-                if (chapter == null)
+                if (chapter != null)
                 {
-                    continue;
-                }
-                chapter.StartSeconds = offset;
-                chapter.EndSeconds = offset + duration;
-                if (String.IsNullOrWhiteSpace(chapter.Title))
-                {
-                    chapter.Title = tracks[index] == null || String.IsNullOrWhiteSpace(tracks[index].Title)
-                        ? "Chapter " + (index + 1)
-                        : tracks[index].Title;
+                    chapter.StartSeconds = offset;
+                    chapter.EndSeconds = offset + duration;
+                    if (String.IsNullOrWhiteSpace(chapter.Title))
+                    {
+                        chapter.Title = tracks[index] == null || String.IsNullOrWhiteSpace(tracks[index].Title)
+                            ? "Chapter " + (index + 1)
+                            : tracks[index].Title;
+                    }
                 }
                 offset += duration;
             }

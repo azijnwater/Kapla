@@ -26,7 +26,7 @@ namespace Kapla
                     {
                         value.LibraryFolders = new System.Collections.Generic.List<string>();
                     }
-                    if (value.DefaultPlaybackSpeed <= 0)
+                    if (value.DefaultPlaybackSpeed <= 0 || Double.IsNaN(value.DefaultPlaybackSpeed) || Double.IsInfinity(value.DefaultPlaybackSpeed))
                     {
                         value.DefaultPlaybackSpeed = 1.0;
                     }
@@ -42,7 +42,7 @@ namespace Kapla
                     {
                         value.DefaultSleepMinutes = 30;
                     }
-                    if (value.Volume < 0 || value.Volume > 1)
+                    if (value.Volume < 0 || value.Volume > 1 || Double.IsNaN(value.Volume) || Double.IsInfinity(value.Volume))
                     {
                         value.Volume = 0.9;
                     }
@@ -71,7 +71,11 @@ namespace Kapla
 
         public static void Save(string path, AppSettings settings)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            var directory = Path.GetDirectoryName(path);
+            if (!String.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
             var serializer = new DataContractJsonSerializer(typeof(AppSettings));
             using (var stream = File.Create(path))
             {
