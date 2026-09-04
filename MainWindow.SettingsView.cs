@@ -136,7 +136,77 @@ namespace Kapla
                 ApplyLaunchAtStartup();
             }));
             right.Children.Add(MakeCompactSettingsCheck("Resume last audiobook", appSettings.ResumeLastAudiobook, value => appSettings.ResumeLastAudiobook = value));
+            right.Children.Add(MakeSettingsSectionLabel("DATA"));
+            right.Children.Add(new TextBlock
+            {
+                Text = "Remove your local library, downloads, saved progress, settings, and Kobo connection.",
+                FontFamily = interFont,
+                FontSize = 8.5,
+                Foreground = Brush("#8A7E7A"),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 5)
+            });
+            var purge = MakeCompactActionButton("Purge all local data", false, "x-lg.svg");
+            purge.Height = 24;
+            purge.HorizontalAlignment = HorizontalAlignment.Left;
+            purge.Foreground = Brush("#B04C4C");
+            purge.ToolTip = "Permanently remove Kapla's local data from this PC";
+            purge.Click += delegate { PurgeLocalData(); };
+            right.Children.Add(purge);
             return MakeSettingsColumns(left, right);
+        }
+
+        private void PurgeLocalData()
+        {
+            var answer = MessageBox.Show(this,
+                "This permanently deletes Kapla's local library, downloaded Kobo audiobooks, saved progress, settings, and account connection from this PC. It cannot be undone. Continue?",
+                "Purge all local data",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No);
+            if (answer != MessageBoxResult.Yes) return;
+
+            try
+            {
+                purgingData = true;
+                if (media != null)
+                {
+                    media.Stop();
+                    media.Close();
+                    media.Source = null;
+                }
+                if (koboClient != null)
+                {
+                    koboClient.Dispose();
+                    koboClient = null;
+                }
+                koboSession = null;
+                pendingKoboActivation = null;
+                if (Directory.Exists(dataDirectory)) Directory.Delete(dataDirectory, true);
+                allBooks.Clear();
+                visibleBooks.Clear();
+                remoteKoboBooks.Clear();
+                selectedKoboBookIds.Clear();
+                currentBook = null;
+                previewBook = null;
+                appSettings.LaunchAtStartup = false;
+                ApplyLaunchAtStartup();
+                MessageBox.Show(this,
+                    "All Kapla data has been removed. Kapla will now close; reopen it to start as a new user.",
+                    "Kapla data purged",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                Close();
+            }
+            catch (Exception ex)
+            {
+                purgingData = false;
+                MessageBox.Show(this,
+                    "Kapla could not remove all local data. Close the app and try again.\n\n" + ex.Message,
+                    "Purge failed",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
         }
 
         private UIElement BuildPlaybackSettingsContent()

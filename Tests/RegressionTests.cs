@@ -160,6 +160,7 @@ namespace Kapla.Tests
             Check("invalid Kobo progress is ignored", !KoboSyncPolicy.IsMeaningfulProgress(Double.NaN, 10, 30));
             Check("negative Kobo progress is ignored", !KoboSyncPolicy.IsMeaningfulProgress(-1, 10, 30));
             Check("Kobo progress threshold has a one-second floor", !KoboSyncPolicy.IsMeaningfulProgress(10.5, 10, 0));
+            CheckEqual("Kobo progress keeps fractional position", 12.5, KoboSyncPolicy.ProgressPercent(75, 600));
             CheckEqual("first retry delay", TimeSpan.FromSeconds(5), KoboSyncPolicy.RetryDelay(1));
             CheckEqual("nonpositive failure count uses first retry delay", TimeSpan.FromSeconds(5), KoboSyncPolicy.RetryDelay(0));
             CheckEqual("retry delay grows", TimeSpan.FromSeconds(40), KoboSyncPolicy.RetryDelay(4));

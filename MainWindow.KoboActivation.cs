@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
+using System.Windows.Threading;
 
 namespace Kapla
 {
@@ -14,7 +15,6 @@ namespace Kapla
 
         private bool ShowKoboActivationDialog(KoboActivation activation)
         {
-            var browserOpened = OpenKoboActivationPage();
             var dialog = new Window
             {
                 Title = "Connect Kobo",
@@ -78,7 +78,7 @@ namespace Kapla
 
             var reassurance = new TextBlock
             {
-                Text = "A secure Kobo page has opened in your browser. Kapla never sees your Kobo password.",
+                Text = "Kapla will open a secure Kobo page in your browser in a moment. Kapla never sees your Kobo password.",
                 FontFamily = interFont,
                 FontSize = 11,
                 LineHeight = 17,
@@ -131,11 +131,12 @@ namespace Kapla
             Grid.SetRow(codeCard, 2);
             root.Children.Add(codeCard);
 
+            var browserOpened = false;
             var steps = new StackPanel();
             steps.Children.Add(BuildActivationStep("1", "Sign in on the Kobo page that opened."));
             steps.Children.Add(BuildActivationStep("2", "Enter the code above and approve this device."));
             steps.Children.Add(BuildActivationStep("3", "Come back here and choose “I’ve connected”."));
-            if (!browserOpened)
+            if (browserOpened)
             {
                 steps.Children.Add(new TextBlock
                 {
@@ -157,7 +158,19 @@ namespace Kapla
             var open = MakeCompactActionButton("Open Kobo", false);
             open.Height = 32;
             open.FontSize = 10.5;
-            open.Click += delegate { OpenKoboActivationPage(); };
+            DispatcherTimer browserTimer = null;
+            Action openBrowser = delegate
+            {
+                if (browserTimer != null) browserTimer.Stop();
+                browserOpened = OpenKoboActivationPage();
+                reassurance.Text = browserOpened
+                    ? "The secure Kobo page is open in your browser. Kapla never sees your Kobo password."
+                    : "The browser could not be opened automatically. Use Open Kobo below, or visit kobo.com/activate. Kapla never sees your Kobo password.";
+                reassurance.Foreground = browserOpened
+                    ? (IsDarkTheme ? Brush("#AAB3BD") : Brush("#6F625E"))
+                    : Brush("#C36B6B");
+            };
+            open.Click += delegate { openBrowser(); };
             actions.Children.Add(open);
             var complete = MakeCompactActionButton("I’ve connected", true);
             complete.Height = 32;
@@ -170,7 +183,12 @@ namespace Kapla
 
             card.Child = root;
             dialog.Content = card;
-            return dialog.ShowDialog() == true;
+            browserTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
+            browserTimer.Tick += delegate { openBrowser(); };
+            browserTimer.Start();
+            var result = dialog.ShowDialog() == true;
+            browserTimer.Stop();
+            return result;
         }
 
         private UIElement BuildActivationStep(string number, string instruction)

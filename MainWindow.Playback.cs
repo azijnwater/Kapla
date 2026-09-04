@@ -143,7 +143,14 @@ namespace Kapla
             isPlaying = false;
             UpdatePlayButtonVisual();
             SaveCurrentPosition();
+            FlushCurrentProgressToKobo();
             UpdateWindowsMediaTimeline();
+        }
+
+        private async void FlushCurrentProgressToKobo()
+        {
+            QueueKoboSynchronization(false, true);
+            await ProcessKoboSyncQueueAsync();
         }
 
         private void PlayCurrent()
@@ -424,7 +431,14 @@ namespace Kapla
             {
                 QueueKoboSynchronization(true, false);
             }
-            if (!koboSyncPending || koboSyncInProgress || DateTime.UtcNow < nextKoboSyncAttemptUtc || koboClient == null || koboSession == null)
+            if (koboSyncInProgress)
+            {
+                while (koboSyncInProgress)
+                {
+                    await Task.Delay(50);
+                }
+            }
+            if (!koboSyncPending || DateTime.UtcNow < nextKoboSyncAttemptUtc || koboClient == null || koboSession == null)
             {
                 return;
             }

@@ -26,6 +26,17 @@ namespace Kapla
             return TimeSpan.FromSeconds(Math.Min(300, 5 * Math.Pow(2, bounded - 1)));
         }
 
+        public static double ProgressPercent(double positionSeconds, double durationSeconds)
+        {
+            if (Double.IsNaN(positionSeconds) || Double.IsInfinity(positionSeconds)
+                || Double.IsNaN(durationSeconds) || Double.IsInfinity(durationSeconds)
+                || durationSeconds <= 0)
+            {
+                return 0;
+            }
+            return Math.Max(0, Math.Min(100, positionSeconds / durationSeconds * 100));
+        }
+
         public static string PreferredProgressId(string entitlementId, string revisionId)
         {
             return !String.IsNullOrWhiteSpace(entitlementId) ? entitlementId : revisionId;

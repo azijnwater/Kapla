@@ -1255,7 +1255,7 @@ namespace Kapla
             if (!String.IsNullOrWhiteSpace(currentBook.KoboRevisionId) && koboClient != null)
             {
                 syncText.Text = "Kobo linked • " + FormatTime(currentBook.PositionSeconds);
-                syncDetailText.Text = "Progress is sent to Kobo as a percentage when the account accepts the beta sync endpoint.";
+                syncDetailText.Text = "Your exact local position is sent to Kobo as high-precision progress and listening-time stats.";
             }
             else
             {

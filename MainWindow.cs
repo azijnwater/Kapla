@@ -149,6 +149,7 @@ namespace Kapla
         private bool libraryExpanded;
         private bool isPinned;
         private bool closeAfterKoboSync;
+        private bool purgingData;
         private string expandedView = "library";
         private string settingsCategory = "General";
 
@@ -289,6 +290,15 @@ namespace Kapla
 
         private async void MainWindowOnClosing(object sender, CancelEventArgs e)
         {
+            if (purgingData)
+            {
+                if (koboClient != null)
+                {
+                    koboClient.Dispose();
+                    koboClient = null;
+                }
+                return;
+            }
             SaveCurrentPosition();
             SaveLibrary();
             SaveWindowPosition();
