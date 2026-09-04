@@ -2,11 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace Kapla
 {
     internal static class KoboCachedAudiobook
     {
+        private const string CompletionMarkerFileName = ".download-complete";
+
         public static KoboDownloadResult TryRestore(KoboRemoteBook book, string rootDirectory)
         {
             if (book == null || String.IsNullOrWhiteSpace(book.ProductId) || String.IsNullOrWhiteSpace(rootDirectory))
@@ -18,6 +21,11 @@ namespace Kapla
             var directory = Path.GetFullPath(Path.Combine(cacheRoot, SafeDirectoryName(book.ProductId)));
             var cachePrefix = cacheRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
             if (!directory.StartsWith(cachePrefix, StringComparison.OrdinalIgnoreCase) || !Directory.Exists(directory))
+            {
+                return null;
+            }
+
+            if (!IsCompletionMarkerValid(book, directory))
             {
                 return null;
             }
@@ -72,6 +80,80 @@ namespace Kapla
                 offset += duration;
             }
             return result;
+        }
+
+        public static void MarkComplete(KoboRemoteBook book, string rootDirectory)
+        {
+            var directory = GetCacheDirectory(book, rootDirectory);
+            if (String.IsNullOrWhiteSpace(directory))
+            {
+                throw new InvalidOperationException("Kobo download cache location is not available.");
+            }
+
+            Directory.CreateDirectory(directory);
+            var markerPath = Path.Combine(directory, CompletionMarkerFileName);
+            File.WriteAllText(markerPath, book.RevisionId ?? String.Empty, Encoding.UTF8);
+        }
+
+        public static void ClearCompletionMarker(KoboRemoteBook book, string rootDirectory)
+        {
+            var directory = GetCacheDirectory(book, rootDirectory);
+            if (String.IsNullOrWhiteSpace(directory))
+            {
+                return;
+            }
+
+            var markerPath = Path.Combine(directory, CompletionMarkerFileName);
+            try
+            {
+                if (File.Exists(markerPath))
+                {
+                    File.Delete(markerPath);
+                }
+            }
+            catch
+            {
+                // A stale marker must never make a partial cache look complete.
+            }
+        }
+
+        private static bool IsCompletionMarkerValid(KoboRemoteBook book, string directory)
+        {
+            var markerPath = Path.Combine(directory, CompletionMarkerFileName);
+            if (!File.Exists(markerPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                var savedRevision = File.ReadAllText(markerPath, Encoding.UTF8).Trim();
+                return String.Equals(savedRevision, book.RevisionId ?? String.Empty, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string GetCacheDirectory(KoboRemoteBook book, string rootDirectory)
+        {
+            if (book == null || String.IsNullOrWhiteSpace(book.ProductId) || String.IsNullOrWhiteSpace(rootDirectory))
+            {
+                return null;
+            }
+
+            try
+            {
+                var cacheRoot = Path.GetFullPath(Path.Combine(rootDirectory, "KoboBooks"));
+                var directory = Path.GetFullPath(Path.Combine(cacheRoot, SafeDirectoryName(book.ProductId)));
+                var cachePrefix = cacheRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                return directory.StartsWith(cachePrefix, StringComparison.OrdinalIgnoreCase) ? directory : null;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static string SafeDirectoryName(string value)

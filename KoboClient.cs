@@ -286,6 +286,18 @@ namespace Kapla
 
         public async Task<KoboDownloadResult> DownloadKoboAudiobookAsync(KoboRemoteBook book, string rootDirectory, IProgress<KoboDownloadProgress> progress)
         {
+            ReportDownload(progress, book.Title, "Checking existing download", 1, 0, 0, null);
+            var cached = KoboCachedAudiobook.TryRestore(book, rootDirectory);
+            if (cached != null)
+            {
+                ReportDownload(progress, book.Title, "Already downloaded", 100, cached.Tracks.Count, cached.Tracks.Count, "All tracks are already on this PC");
+                return cached;
+            }
+
+            // A marker is written only after every track has completed. Remove a
+            // stale marker before retrying so a partial cache can never be treated
+            // as a finished audiobook after a failed download.
+            KoboCachedAudiobook.ClearCompletionMarker(book, rootDirectory);
             ReportDownload(progress, book.Title, "Preparing download", 1, 0, 0, null);
             await LoadResourcesAsync().ConfigureAwait(false);
             var metadata = book.Metadata ?? new Dictionary<string, object>();
@@ -419,6 +431,11 @@ namespace Kapla
                 limiter.Dispose();
             }
 
+            if (partPaths.Any(path => String.IsNullOrWhiteSpace(path) || !File.Exists(path) || new FileInfo(path).Length <= 0))
+            {
+                throw new InvalidOperationException("Kobo returned an incomplete audiobook download. Please try again.");
+            }
+
             var extensions = partPaths.Select(Path.GetExtension).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (extensions.Count != 1 || !String.Equals(extensions[0], ".mp3", StringComparison.OrdinalIgnoreCase))
             {
@@ -454,6 +471,7 @@ namespace Kapla
             {
                 result.Chapters = BuildTrackChapters(result.Tracks);
             }
+            KoboCachedAudiobook.MarkComplete(book, rootDirectory);
             ReportDownload(progress, book.Title, "Import complete", 100, tracks.Count, tracks.Count, null);
             return result;
         }

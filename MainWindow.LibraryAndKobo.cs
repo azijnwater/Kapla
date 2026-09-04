@@ -636,10 +636,7 @@ namespace Kapla
             var restored = 0;
             foreach (var remoteBook in remoteBooks)
             {
-                var alreadyImported = allBooks.Any(book =>
-                    (!String.IsNullOrWhiteSpace(remoteBook.RevisionId) && String.Equals(book.KoboRevisionId, remoteBook.RevisionId, StringComparison.OrdinalIgnoreCase))
-                    || (!String.IsNullOrWhiteSpace(remoteBook.ProductId) && String.Equals(book.KoboProductId, remoteBook.ProductId, StringComparison.OrdinalIgnoreCase)));
-                if (alreadyImported)
+                if (FindLinkedKoboBook(remoteBook) != null)
                 {
                     continue;
                 }
@@ -705,13 +702,32 @@ namespace Kapla
                     koboDownloadProgress.Value = 0;
                 }
                 var reporter = new Progress<KoboDownloadProgress>(UpdateIntegratedDownloadProgress);
+                var skipped = 0;
                 foreach (var book in selected)
                 {
-                    await ImportKoboBookAsync(book, reporter);
+                    if (await ImportKoboBookAsync(book, reporter))
+                    {
+                        skipped++;
+                    }
                 }
-                statusText.Text = selected.Count == 1
-                    ? "Imported “" + selected[0].Title + "”."
-                    : "Imported " + selected.Count + " Kobo audiobooks.";
+                var importedCount = selected.Count - skipped;
+                if (skipped == selected.Count)
+                {
+                    statusText.Text = selected.Count == 1
+                        ? "Already downloaded \"" + selected[0].Title + "\"."
+                        : "All selected Kobo audiobooks are already downloaded.";
+                }
+                else if (skipped > 0)
+                {
+                    statusText.Text = "Imported " + importedCount + " Kobo audiobook" + (importedCount == 1 ? String.Empty : "s")
+                        + "; skipped " + skipped + " already downloaded.";
+                }
+                else
+                {
+                    statusText.Text = selected.Count == 1
+                        ? "Imported \"" + selected[0].Title + "\"."
+                        : "Imported " + selected.Count + " Kobo audiobooks.";
+                }
                 ShowExpandedView("library");
             }
             catch (Exception ex)
@@ -763,13 +779,32 @@ namespace Kapla
             ShowExpandedView("kobo");
         }
 
-        private async Task ImportKoboBookAsync(KoboRemoteBook remoteBook, IProgress<KoboDownloadProgress> progress)
+        private async Task<bool> ImportKoboBookAsync(KoboRemoteBook remoteBook, IProgress<KoboDownloadProgress> progress)
         {
+            var existing = FindLinkedKoboBook(remoteBook);
+            if (HasCompleteKoboDownload(existing) && IsCurrentKoboRevision(existing, remoteBook))
+            {
+                if (progress != null)
+                {
+                    progress.Report(new KoboDownloadProgress
+                    {
+                        Title = remoteBook.Title,
+                        Stage = "Already downloaded",
+                        Percent = 100,
+                        CurrentTrack = existing.Tracks.Count,
+                        TotalTracks = existing.Tracks.Count,
+                        Detail = "All tracks are already on this PC"
+                    });
+                }
+                statusText.Text = "Already downloaded \"" + remoteBook.Title + "\".";
+                return true;
+            }
+
             var result = await koboClient.DownloadKoboAudiobookAsync(remoteBook, dataDirectory, progress);
-            var existing = allBooks.FirstOrDefault(book => String.Equals(book.KoboRevisionId, remoteBook.RevisionId, StringComparison.OrdinalIgnoreCase));
             if (existing != null)
             {
                 existing.Path = result.OutputPath;
+                existing.Title = remoteBook.Title;
                 existing.CoverPath = result.CoverPath;
                 existing.CoverUrl = result.CoverUrl;
                 existing.Author = KoboMetadata.PreferAuthor(result.Author, existing.Author);
@@ -780,7 +815,9 @@ namespace Kapla
                 existing.Description = result.Description;
                 existing.Tracks = result.Tracks;
                 existing.Chapters = result.Chapters;
+                existing.KoboRevisionId = remoteBook.RevisionId;
                 existing.KoboEntitlementId = remoteBook.EntitlementId;
+                existing.KoboProductId = remoteBook.ProductId;
                 existing.KoboProgressPercent = remoteBook.ProgressPercent;
                 existing.Finished = false;
             }
@@ -808,12 +845,73 @@ namespace Kapla
             }
             RefreshVisibleBooks();
             SaveLibrary();
-            statusText.Text = "Imported “" + remoteBook.Title + "” from Kobo.";
-            var imported = allBooks.FirstOrDefault(book => String.Equals(book.KoboRevisionId, remoteBook.RevisionId, StringComparison.OrdinalIgnoreCase));
+            statusText.Text = "Imported \"" + remoteBook.Title + "\" from Kobo.";
+            var imported = FindLinkedKoboBook(remoteBook);
             if (imported != null)
             {
                 libraryList.SelectedItem = imported;
             }
+            return false;
+        }
+
+        private BookEntry FindLinkedKoboBook(KoboRemoteBook remoteBook)
+        {
+            if (remoteBook == null)
+            {
+                return null;
+            }
+
+            if (!String.IsNullOrWhiteSpace(remoteBook.RevisionId))
+            {
+                var revisionMatch = allBooks.FirstOrDefault(book => book != null
+                    && String.Equals(book.KoboRevisionId, remoteBook.RevisionId, StringComparison.OrdinalIgnoreCase));
+                if (revisionMatch != null)
+                {
+                    return revisionMatch;
+                }
+            }
+
+            return allBooks.FirstOrDefault(book => book != null
+                && !String.IsNullOrWhiteSpace(remoteBook.ProductId)
+                && String.Equals(book.KoboProductId, remoteBook.ProductId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool IsCurrentKoboRevision(BookEntry book, KoboRemoteBook remoteBook)
+        {
+            return book != null && remoteBook != null
+                && (String.IsNullOrWhiteSpace(remoteBook.RevisionId)
+                    || String.IsNullOrWhiteSpace(book.KoboRevisionId)
+                    || String.Equals(book.KoboRevisionId, remoteBook.RevisionId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool HasCompleteKoboDownload(BookEntry book)
+        {
+            if (book == null || book.Tracks == null || book.Tracks.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (var track in book.Tracks)
+            {
+                if (track == null || String.IsNullOrWhiteSpace(track.Path))
+                {
+                    return false;
+                }
+
+                try
+                {
+                    if (!File.Exists(track.Path) || new FileInfo(track.Path).Length <= 0)
+                    {
+                        return false;
+                    }
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private void UpdateLinkedKoboDetails(IList<KoboRemoteBook> remoteBooks)

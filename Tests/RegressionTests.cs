@@ -367,6 +367,7 @@ namespace Kapla.Tests
         {
             var book = new KoboRemoteBook
             {
+                RevisionId = "cached-revision",
                 ProductId = "cached-book",
                 Title = "Cached book",
                 Author = "Cached author",
@@ -377,6 +378,7 @@ namespace Kapla.Tests
             File.WriteAllBytes(Path.Combine(directory, "000.mp3"), new byte[12000]);
             File.WriteAllBytes(Path.Combine(directory, "001.mp3"), new byte[24000]);
             File.WriteAllBytes(Path.Combine(directory, "cover.jpg"), new byte[] { 1, 2, 3 });
+            KoboCachedAudiobook.MarkComplete(book, root);
             var restored = KoboCachedAudiobook.TryRestore(book, root);
             Check("cached Kobo audiobook is restored", restored != null);
             CheckEqual("cached Kobo track count", 2, restored.Tracks.Count);
@@ -384,9 +386,20 @@ namespace Kapla.Tests
             CheckEqual("cached Kobo chapter count", 2, restored.Chapters.Count);
             Check("cached Kobo duration is estimated", restored.Tracks.Sum(track => track.DurationSeconds) > 0);
 
+            File.Delete(Path.Combine(directory, ".download-complete"));
+            CheckEqual<KoboDownloadResult>("cache without completion marker is rejected", null, KoboCachedAudiobook.TryRestore(book, root));
+            KoboCachedAudiobook.MarkComplete(book, root);
             File.Delete(Path.Combine(directory, "001.mp3"));
             File.WriteAllBytes(Path.Combine(directory, "002.mp3"), new byte[24000]);
             CheckEqual<KoboDownloadResult>("incomplete Kobo cache is rejected", null, KoboCachedAudiobook.TryRestore(book, root));
+
+            File.WriteAllBytes(Path.Combine(directory, "001.mp3"), new byte[24000]);
+            KoboCachedAudiobook.MarkComplete(new KoboRemoteBook
+            {
+                RevisionId = "different-revision",
+                ProductId = book.ProductId
+            }, root);
+            CheckEqual<KoboDownloadResult>("cache for a different Kobo revision is rejected", null, KoboCachedAudiobook.TryRestore(book, root));
         }
 
         public static int Main(string[] args)
