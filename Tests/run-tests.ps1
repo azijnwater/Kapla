@@ -13,10 +13,12 @@ $references = @(
 $sources = @(
     (Join-Path $projectRoot "Models.cs"),
     (Join-Path $projectRoot "KoboMetadata.cs"),
+    (Join-Path $projectRoot "KoboCachedAudiobook.cs"),
     (Join-Path $projectRoot "PlaybackTimeline.cs"),
     (Join-Path $projectRoot "PlaybackProgress.cs"),
     (Join-Path $projectRoot "SleepTimerState.cs"),
     (Join-Path $projectRoot "KoboSyncPolicy.cs"),
+    (Join-Path $projectRoot "KoboEndpointPolicy.cs"),
     (Join-Path $projectRoot "AppSettingsStore.cs"),
     (Join-Path $projectRoot "LocalAudiobookMetadata.cs"),
     (Join-Path $testRoot "RegressionTests.cs")

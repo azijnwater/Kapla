@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Runtime.Serialization.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -112,7 +111,7 @@ namespace Kapla
         public KoboClient(KoboSession session)
         {
             Session = session;
-            http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+            http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(30) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         }
 
@@ -133,7 +132,10 @@ namespace Kapla
                 + "&pwsav=" + Uri.EscapeDataString(ApplicationVersion)
                 + "&pwsdm=" + Uri.EscapeDataString(PlatformId)
                 + "&pwspos=3.0.35%2B&pwspov=NA";
-            var html = await http.GetStringAsync(AuthApi + "/ActivateOnWeb" + query).ConfigureAwait(false);
+            var activationUri = new Uri(AuthApi + "/ActivateOnWeb" + query, UriKind.Absolute);
+            EnsureTrustedUri(activationUri, KoboEndpointKind.Activation);
+            var activationResponse = await SendRequestAsync(new HttpRequestMessage(HttpMethod.Get, activationUri), KoboCredentialType.None, KoboEndpointKind.Activation).ConfigureAwait(false);
+            var html = await ReadResponseTextAsync(activationResponse).ConfigureAwait(false);
             var pollMatch = Regex.Match(html, "data-poll-endpoint\\s*=\\s*[\"']([^\"']+)[\"']", RegexOptions.IgnoreCase);
             var code = ExtractActivationCode(html);
             if (!pollMatch.Success || String.IsNullOrWhiteSpace(code))
@@ -141,10 +143,12 @@ namespace Kapla
                 throw new InvalidOperationException("Kobo's activation page changed and did not provide a device code.");
             }
 
+            var pollUrl = new Uri(new Uri(AuthApi + "/", UriKind.Absolute), HttpUtility.HtmlDecode(pollMatch.Groups[1].Value));
+            EnsureTrustedUri(pollUrl, KoboEndpointKind.Activation);
             return new KoboActivation
             {
                 Code = code,
-                PollUrl = AuthApi + HttpUtility.HtmlDecode(pollMatch.Groups[1].Value),
+                PollUrl = pollUrl.AbsoluteUri,
                 DeviceId = Session.DeviceId,
                 SerialNumber = Session.SerialNumber
             };
@@ -154,8 +158,10 @@ namespace Kapla
         {
             for (var attempt = 0; attempt < 60; attempt++)
             {
-                var response = await http.PostAsync(activation.PollUrl, null).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
+                var pollUri = KoboEndpointPolicy.CreateUri(activation.PollUrl);
+                EnsureTrustedUri(pollUri, KoboEndpointKind.Activation);
+                var response = await SendRequestAsync(new HttpRequestMessage(HttpMethod.Post, pollUri), KoboCredentialType.None, KoboEndpointKind.Activation).ConfigureAwait(false);
+                await EnsureSuccessAsync(response, "Kobo activation").ConfigureAwait(false);
                 var payload = json.DeserializeObject(await response.Content.ReadAsStringAsync().ConfigureAwait(false)) as Dictionary<string, object>;
                 if (payload == null || !String.Equals(GetString(payload, "Status"), "Complete", StringComparison.OrdinalIgnoreCase))
                 {
@@ -229,9 +235,17 @@ namespace Kapla
                         continue;
                     }
 
+                    var readingState = FindDictionary(item, "ReadingState");
+                    var entitlement = FindDictionary(item, "BookEntitlement");
+                    var entitlementId = FirstString(readingState, "EntitlementId")
+                        ?? FirstString(metadata, "EntitlementId")
+                        ?? FirstString(entitlement, "Id", "EntitlementId")
+                        ?? revisionId;
+
                     var remote = new KoboRemoteBook
                     {
                         RevisionId = revisionId,
+                        EntitlementId = entitlementId,
                         ProductId = FirstString(metadata, "ProductId", "RevisionId", "Id") ?? revisionId,
                         Title = FirstString(metadata, "Title", "Name") ?? "Untitled Kobo audiobook",
                         Author = KoboMetadata.PreferAuthor(KoboMetadata.FindAuthor(metadata), KoboMetadata.FindAuthor(item)),
@@ -280,7 +294,7 @@ namespace Kapla
             if (String.IsNullOrWhiteSpace(manifestUrl))
             {
                 var resource = GetResource("audiobook").Replace("{ProductId}", Uri.EscapeDataString(book.ProductId));
-                var product = await GetJsonAsync(resource).ConfigureAwait(false);
+                var product = await GetApiJsonAsync(resource).ConfigureAwait(false);
                 var productDictionary = product as Dictionary<string, object>;
                 if (productDictionary != null)
                 {
@@ -309,7 +323,7 @@ namespace Kapla
 
             manifestUrl = NormalizeKoboUrl(manifestUrl);
             ReportDownload(progress, book.Title, "Reading audiobook manifest", 8, 0, 0, null);
-            var manifest = await GetJsonAsync(manifestUrl).ConfigureAwait(false);
+            var manifest = await GetResourceJsonAsync(manifestUrl).ConfigureAwait(false);
             var spine = FindList(manifest, "Spine").ToList();
             if (spine.Count == 0)
             {
@@ -444,16 +458,27 @@ namespace Kapla
             return result;
         }
 
-        public async Task UpdateProgressAsync(string revisionId, double positionSeconds, double durationSeconds)
+        public async Task UpdateProgressAsync(string entitlementId, double positionSeconds, double durationSeconds)
         {
-            if (String.IsNullOrWhiteSpace(revisionId) || durationSeconds <= 0)
+            if (String.IsNullOrWhiteSpace(entitlementId) || durationSeconds <= 0)
             {
                 return;
             }
 
             await LoadResourcesAsync().ConfigureAwait(false);
             var percent = (int)Math.Round(Math.Max(0, Math.Min(100, positionSeconds / durationSeconds * 100)));
-            var stateUrl = GetResource("reading_state").Replace("{Ids}", Uri.EscapeDataString(revisionId));
+            var stateUrl = GetResource("reading_state").Replace("{Ids}", Uri.EscapeDataString(entitlementId));
+            var currentState = FirstDictionary(await GetApiJsonAsync(stateUrl).ConfigureAwait(false)) ?? new Dictionary<string, object>();
+            var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture);
+            var bookmark = GetValue(currentState, "CurrentBookmark") as Dictionary<string, object> ?? new Dictionary<string, object>();
+            bookmark["ProgressPercent"] = percent;
+            bookmark["ContentSourceProgressPercent"] = percent;
+            bookmark["LastModified"] = timestamp;
+            var statistics = GetValue(currentState, "Statistics") as Dictionary<string, object> ?? new Dictionary<string, object>();
+            statistics["LastModified"] = timestamp;
+            var statusInfo = GetValue(currentState, "StatusInfo") as Dictionary<string, object> ?? new Dictionary<string, object>();
+            statusInfo["LastModified"] = timestamp;
+            statusInfo["Status"] = percent >= 99 ? "Finished" : "Reading";
             var state = new Dictionary<string, object>
             {
                 {
@@ -461,21 +486,11 @@ namespace Kapla
                     {
                         new Dictionary<string, object>
                         {
-                            {
-                                "CurrentBookmark", new Dictionary<string, object>
-                                {
-                                    { "ProgressPercent", percent },
-                                    { "ContentSourceProgressPercent", percent },
-                                    { "Location", null }
-                                }
-                            },
-                            { "Statistics", null },
-                            {
-                                "StatusInfo", new Dictionary<string, object>
-                                {
-                                    { "Status", percent >= 99 ? "Finished" : "Reading" }
-                                }
-                            }
+                            { "EntitlementId", entitlementId },
+                            { "LastModified", timestamp },
+                            { "CurrentBookmark", bookmark },
+                            { "Statistics", statistics },
+                            { "StatusInfo", statusInfo }
                         }
                     }
                 }
@@ -495,7 +510,7 @@ namespace Kapla
                 return;
             }
 
-            var data = await GetJsonAsync(StoreApi + "/v1/initialization").ConfigureAwait(false) as Dictionary<string, object>;
+            var data = await GetApiJsonAsync(StoreApi + "/v1/initialization").ConfigureAwait(false) as Dictionary<string, object>;
             var resourceData = data == null ? null : GetValue(data, "Resources") as Dictionary<string, object>;
             if (resourceData == null)
             {
@@ -519,7 +534,7 @@ namespace Kapla
             var direct = FirstString(metadata, "ImageUrl", "CoverUrl", "ThumbnailUrl");
             if (!String.IsNullOrWhiteSpace(direct))
             {
-                return NormalizeKoboUrl(direct);
+                return SafeResourceUrl(NormalizeKoboUrl(direct));
             }
 
             var imageId = FirstString(metadata, "CoverImageId", "ImageId");
@@ -540,7 +555,7 @@ namespace Kapla
                 return null;
             }
 
-            return templateText
+            return SafeResourceUrl(templateText
                 .Replace("{ImageId}", Uri.EscapeDataString(imageId))
                 .Replace("{Width}", "180")
                 .Replace("{width}", "180")
@@ -549,58 +564,118 @@ namespace Kapla
                 .Replace("{Quality}", "90")
                 .Replace("{quality}", "90")
                 .Replace("{IsGreyscale}", "false")
-                .Replace("{isGreyscale}", "false");
+                .Replace("{isGreyscale}", "false"));
         }
 
-        private async Task<object> GetJsonAsync(string url)
+        private static string SafeResourceUrl(string value)
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            var uri = KoboEndpointPolicy.CreateUri(value);
+            return String.IsNullOrWhiteSpace(KoboEndpointPolicy.Validate(uri, KoboEndpointKind.Resource))
+                ? uri.AbsoluteUri
+                : null;
+        }
+
+        private async Task<object> GetApiJsonAsync(string url)
+        {
+            var uri = KoboEndpointPolicy.CreateUri(url);
+            EnsureTrustedUri(uri, KoboEndpointKind.Api);
+            var request = new HttpRequestMessage(HttpMethod.Get, uri);
             var result = await SendAuthorizedAsync(request).ConfigureAwait(false);
             return result.Data;
         }
 
+        private async Task<object> GetResourceJsonAsync(string url)
+        {
+            var uri = KoboEndpointPolicy.CreateUri(url);
+            EnsureTrustedUri(uri, KoboEndpointKind.Resource);
+            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            var response = await SendRequestAsync(request, KoboCredentialType.None, KoboEndpointKind.Resource).ConfigureAwait(false);
+            await EnsureSuccessAsync(response, "a Kobo resource").ConfigureAwait(false);
+            var text = await ReadResponseTextAsync(response).ConfigureAwait(false);
+            return String.IsNullOrWhiteSpace(text) ? new Dictionary<string, object>() : json.DeserializeObject(text);
+        }
+
         private async Task<object> PostJsonAsync(string url, object payload, bool authorized)
         {
-            var request = new HttpRequestMessage(HttpMethod.Post, url)
+            var uri = KoboEndpointPolicy.CreateUri(url);
+            var kind = uri != null && KoboEndpointPolicy.IsExactHost(uri, AuthApi)
+                ? KoboEndpointKind.Activation
+                : KoboEndpointKind.Api;
+            EnsureTrustedUri(uri, kind);
+            var request = new HttpRequestMessage(HttpMethod.Post, uri)
             {
                 Content = new StringContent(json.Serialize(payload), Encoding.UTF8, "application/json")
             };
-            if (authorized)
-            {
-                AddAuthHeaders(request);
-            }
-            var response = await http.SendAsync(request).ConfigureAwait(false);
+            var response = await SendRequestAsync(request, authorized ? KoboCredentialType.AccessToken : KoboCredentialType.None, kind).ConfigureAwait(false);
             await EnsureSuccessAsync(response, "the Kobo service").ConfigureAwait(false);
-            var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            var text = await ReadResponseTextAsync(response).ConfigureAwait(false);
             return String.IsNullOrWhiteSpace(text) ? new Dictionary<string, object>() : json.DeserializeObject(text);
         }
 
         private async Task<KoboHttpResult> SendAuthorizedAsync(HttpRequestMessage request)
         {
-            AddAuthHeaders(request);
-            var response = await http.SendAsync(request).ConfigureAwait(false);
+            return await SendAuthorizedAsync(request, true).ConfigureAwait(false);
+        }
+
+        private async Task<KoboHttpResult> SendAuthorizedAsync(HttpRequestMessage request, bool allowUserKeyFallback)
+        {
+            EnsureTrustedUri(request.RequestUri, KoboEndpointKind.Api);
+            var response = await SendRequestAsync(request, KoboCredentialType.AccessToken, KoboEndpointKind.Api).ConfigureAwait(false);
             if (response.StatusCode == HttpStatusCode.Unauthorized && !refreshing && !String.IsNullOrWhiteSpace(Session.RefreshToken))
             {
                 refreshing = true;
+                Exception refreshFailure = null;
                 try
                 {
                     await RefreshAsync().ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    refreshFailure = exception;
                 }
                 finally
                 {
                     refreshing = false;
                 }
-                var retry = new HttpRequestMessage(request.Method, request.RequestUri);
-                if (request.Content != null)
+                if (refreshFailure != null)
                 {
-                    var content = await request.Content.ReadAsStringAsync().ConfigureAwait(false);
-                    retry.Content = new StringContent(content, Encoding.UTF8, "application/json");
+                    if (!allowUserKeyFallback || String.IsNullOrWhiteSpace(Session.UserKey))
+                    {
+                        throw refreshFailure;
+                    }
+                    response.Dispose();
+                    var fallback = await CloneRequestAsync(request).ConfigureAwait(false);
+                    request.Dispose();
+                    return await SendUserKeyAuthorizedAsync(fallback).ConfigureAwait(false);
                 }
+                var retry = await CloneRequestAsync(request).ConfigureAwait(false);
                 request.Dispose();
-                return await SendAuthorizedAsync(retry).ConfigureAwait(false);
+                return await SendAuthorizedAsync(retry, allowUserKeyFallback).ConfigureAwait(false);
+            }
+            if ((response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+                && allowUserKeyFallback
+                && !String.IsNullOrWhiteSpace(Session.UserKey))
+            {
+                response.Dispose();
+                var fallback = await CloneRequestAsync(request).ConfigureAwait(false);
+                request.Dispose();
+                return await SendUserKeyAuthorizedAsync(fallback).ConfigureAwait(false);
             }
             await EnsureSuccessAsync(response, "the Kobo service").ConfigureAwait(false);
-            var text = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            var text = await ReadResponseTextAsync(response).ConfigureAwait(false);
+            return new KoboHttpResult
+            {
+                Response = response,
+                Data = String.IsNullOrWhiteSpace(text) ? new Dictionary<string, object>() : json.DeserializeObject(text)
+            };
+        }
+
+        private async Task<KoboHttpResult> SendUserKeyAuthorizedAsync(HttpRequestMessage request)
+        {
+            EnsureTrustedUri(request.RequestUri, KoboEndpointKind.Api);
+            var response = await SendRequestAsync(request, KoboCredentialType.UserKey, KoboEndpointKind.Api).ConfigureAwait(false);
+            await EnsureSuccessAsync(response, "the Kobo service").ConfigureAwait(false);
+            var text = await ReadResponseTextAsync(response).ConfigureAwait(false);
             return new KoboHttpResult
             {
                 Response = response,
@@ -898,37 +973,148 @@ namespace Kapla
 
         private async Task<HttpResponseMessage> SendDownloadRequestAsync(string url)
         {
-            var request = new HttpRequestMessage(HttpMethod.Get, url);
-            AddAuthHeaders(request);
-            var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-            request.Dispose();
-            if (response.StatusCode == HttpStatusCode.Unauthorized && !refreshing && !String.IsNullOrWhiteSpace(Session.RefreshToken))
+            var uri = KoboEndpointPolicy.CreateUri(url);
+            EnsureTrustedUri(uri, KoboEndpointKind.Resource);
+            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            return await SendRequestAsync(request, KoboCredentialType.None, KoboEndpointKind.Resource, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+        }
+
+        private async Task<HttpResponseMessage> SendRequestAsync(HttpRequestMessage request, KoboCredentialType credential, KoboEndpointKind endpointKind, HttpCompletionOption completionOption = HttpCompletionOption.ResponseContentRead)
+        {
+            var redirects = 0;
+            while (true)
             {
+                await EnsureTrustedUriAsync(request.RequestUri, endpointKind).ConfigureAwait(false);
+                ApplyCredentialHeaders(request, credential);
+                var response = await http.SendAsync(request, completionOption).ConfigureAwait(false);
+                if ((int)response.StatusCode < 300 || (int)response.StatusCode >= 400)
+                {
+                    return response;
+                }
+
+                if (++redirects > 3 || response.Headers.Location == null)
+                {
+                    response.Dispose();
+                    throw new InvalidOperationException("Kobo returned an unsafe or excessive redirect chain.");
+                }
+
+                var nextUri = new Uri(request.RequestUri, response.Headers.Location);
+                // Redirects deliberately become anonymous resource requests. This
+                // prevents a trusted API response from forwarding credentials to a
+                // third-party host, even when the redirect is unexpected.
+                await EnsureTrustedUriAsync(nextUri, KoboEndpointKind.Resource).ConfigureAwait(false);
+                var nextMethod = response.StatusCode == HttpStatusCode.MovedPermanently
+                    || response.StatusCode == HttpStatusCode.Found
+                    || response.StatusCode == HttpStatusCode.SeeOther
+                    ? HttpMethod.Get
+                    : request.Method;
+                var nextRequest = new HttpRequestMessage(nextMethod, nextUri);
+                if (nextMethod == request.Method && request.Content != null)
+                {
+                    var content = await request.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    nextRequest.Content = new StringContent(content, Encoding.UTF8, "application/json");
+                }
+                foreach (var header in request.Headers)
+                {
+                    if (String.Equals(header.Key, "Authorization", StringComparison.OrdinalIgnoreCase)
+                        || String.Equals(header.Key, "x-kobo-userkey", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    nextRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
                 response.Dispose();
-                await RefreshAsync().ConfigureAwait(false);
-                request = new HttpRequestMessage(HttpMethod.Get, url);
-                AddAuthHeaders(request);
-                response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
                 request.Dispose();
-            }
-            return response;
-        }
-
-        private void AddAuthHeaders(HttpRequestMessage request)
-        {
-            if (!String.IsNullOrWhiteSpace(Session.AccessToken))
-            {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Session.AccessToken);
-            }
-            if (request.RequestUri != null && IsKoboHost(request.RequestUri) && !String.IsNullOrWhiteSpace(Session.UserKey))
-            {
-                request.Headers.TryAddWithoutValidation("x-kobo-userkey", Session.UserKey);
+                request = nextRequest;
+                credential = KoboCredentialType.None;
+                endpointKind = KoboEndpointKind.Resource;
             }
         }
 
-        private static bool IsKoboHost(Uri uri)
+        private void ApplyCredentialHeaders(HttpRequestMessage request, KoboCredentialType credential)
         {
-            return uri != null && uri.Host.EndsWith("kobo.com", StringComparison.OrdinalIgnoreCase);
+            if (request == null || request.RequestUri == null)
+            {
+                return;
+            }
+            request.Headers.Authorization = null;
+            request.Headers.Remove("x-kobo-userkey");
+            if (credential == KoboCredentialType.AccessToken)
+            {
+                foreach (var header in KoboEndpointPolicy.BuildCredentialHeaders(request.RequestUri, Session.AccessToken, Session.UserKey))
+                {
+                    request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+            }
+            else if (credential == KoboCredentialType.UserKey)
+            {
+                foreach (var header in KoboEndpointPolicy.BuildCredentialHeaders(request.RequestUri, null, Session.UserKey))
+                {
+                    request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+            }
+        }
+
+        private static void EnsureTrustedUri(Uri uri, KoboEndpointKind kind)
+        {
+            var error = KoboEndpointPolicy.Validate(uri, kind);
+            if (!String.IsNullOrWhiteSpace(error))
+            {
+                throw new InvalidOperationException(error);
+            }
+        }
+
+        private static async Task EnsureTrustedUriAsync(Uri uri, KoboEndpointKind kind)
+        {
+            EnsureTrustedUri(uri, kind);
+            IPAddress parsedAddress;
+            if (uri == null || IPAddress.TryParse(uri.Host, out parsedAddress))
+            {
+                return;
+            }
+            try
+            {
+                var addresses = await Dns.GetHostAddressesAsync(uri.DnsSafeHost).ConfigureAwait(false);
+                if (addresses == null || addresses.Length == 0 || addresses.Any(address => KoboEndpointPolicy.IsLocalOrPrivateHost(address.ToString())))
+                {
+                    throw new InvalidOperationException("The Kobo destination resolved to a local or private address and was rejected.");
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                throw;
+            }
+            catch
+            {
+                throw new InvalidOperationException("The Kobo destination could not be safely resolved.");
+            }
+        }
+
+        private static async Task<string> ReadResponseTextAsync(HttpResponseMessage response)
+        {
+            return response == null || response.Content == null
+                ? String.Empty
+                : await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        }
+
+        private static async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage request)
+        {
+            var clone = new HttpRequestMessage(request.Method, request.RequestUri);
+            if (request.Content != null)
+            {
+                var content = await request.Content.ReadAsStringAsync().ConfigureAwait(false);
+                clone.Content = new StringContent(content, Encoding.UTF8, "application/json");
+            }
+            foreach (var header in request.Headers)
+            {
+                if (String.Equals(header.Key, "Authorization", StringComparison.OrdinalIgnoreCase)
+                    || String.Equals(header.Key, "x-kobo-userkey", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+            return clone;
         }
 
         private static string NormalizeKoboUrl(string url)
@@ -940,7 +1126,7 @@ namespace Kapla
             try
             {
                 var uri = new Uri(url);
-                if (!IsKoboHost(uri) || uri.Host.IndexOf("amazonaws.com", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (!KoboEndpointPolicy.IsExactHost(uri, KoboEndpointPolicy.StoreApiHost) || uri.Host.IndexOf("amazonaws.com", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return url;
                 }
@@ -956,33 +1142,16 @@ namespace Kapla
             }
         }
 
-        private static async Task EnsureSuccessAsync(HttpResponseMessage response, string action)
+        private static Task EnsureSuccessAsync(HttpResponseMessage response, string action)
         {
             if (response.IsSuccessStatusCode)
             {
-                return;
-            }
-            var detail = String.Empty;
-            try
-            {
-                detail = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-                // The status code is still useful if the body cannot be read.
-            }
-            if (detail.Length > 240)
-            {
-                detail = detail.Substring(0, 240);
+                return Task.CompletedTask;
             }
             var message = "Kobo refused " + action + " (HTTP " + (int)response.StatusCode + ").";
             if (response.StatusCode == HttpStatusCode.Forbidden)
             {
                 message += " This title may be protected or unavailable to third-party playback.";
-            }
-            if (!String.IsNullOrWhiteSpace(detail))
-            {
-                message += " " + detail.Replace("\r", " ").Replace("\n", " ");
             }
             throw new InvalidOperationException(message);
         }
@@ -1158,6 +1327,29 @@ namespace Kapla
             }
         }
 
+        private static Dictionary<string, object> FirstDictionary(object root)
+        {
+            var dictionary = root as Dictionary<string, object>;
+            if (dictionary != null)
+            {
+                return dictionary;
+            }
+            var list = root as IEnumerable;
+            if (list == null || root is string)
+            {
+                return null;
+            }
+            foreach (var item in list)
+            {
+                dictionary = item as Dictionary<string, object>;
+                if (dictionary != null)
+                {
+                    return dictionary;
+                }
+            }
+            return null;
+        }
+
         private static object FindValue(object root, string key)
         {
             var dictionary = root as Dictionary<string, object>;
@@ -1303,7 +1495,8 @@ namespace Kapla
             {
                 result = result.Replace(invalid, '_');
             }
-            return result.Trim();
+            result = result.Trim().TrimEnd('.');
+            return result.Length == 0 || result == "." || result == ".." ? "kobo-audiobook" : result;
         }
 
         private static string RandomHex(int length)

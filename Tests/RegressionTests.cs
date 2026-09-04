@@ -143,6 +143,40 @@ namespace Kapla.Tests
             CheckEqual("first retry delay", TimeSpan.FromSeconds(5), KoboSyncPolicy.RetryDelay(1));
             CheckEqual("retry delay grows", TimeSpan.FromSeconds(40), KoboSyncPolicy.RetryDelay(4));
             CheckEqual("retry delay is bounded", TimeSpan.FromSeconds(160), KoboSyncPolicy.RetryDelay(20));
+            CheckEqual("entitlement id is preferred for progress", "entitlement", KoboSyncPolicy.PreferredProgressId("entitlement", "revision"));
+            CheckEqual("revision id remains a migration fallback", "revision", KoboSyncPolicy.PreferredProgressId(null, "revision"));
+        }
+
+        private static void KoboEndpointSecurityTests()
+        {
+            var token = "fake-access-token";
+            var userKey = "fake-user-key";
+            var store = new Uri("https://storeapi.kobo.com/v1/library/sync");
+            var auth = new Uri("https://auth.kobobooks.com/ActivateOnWeb");
+            var lookalike = new Uri("https://evilkobo.com/content");
+            var nestedLookalike = new Uri("https://kobo.com.attacker.example/content");
+            var apiLookalike = new Uri("https://api.kobo.com.attacker.example/content");
+            var thirdParty = new Uri("https://cdn.example.com/audio.mp3");
+
+            var storeHeaders = KoboEndpointPolicy.BuildCredentialHeaders(store, token, userKey);
+            Check("storeapi receives access token", storeHeaders.ContainsKey("Authorization"));
+            Check("storeapi receives user key", storeHeaders.ContainsKey("x-kobo-userkey"));
+            var userKeyOnlyHeaders = KoboEndpointPolicy.BuildCredentialHeaders(store, null, userKey);
+            Check("storeapi supports user-key fallback", userKeyOnlyHeaders.Count == 1 && userKeyOnlyHeaders.ContainsKey("x-kobo-userkey"));
+            Check("auth receives no bearer token", !KoboEndpointPolicy.BuildCredentialHeaders(auth, token, userKey).ContainsKey("Authorization"));
+            Check("evilkobo receives no credentials", KoboEndpointPolicy.BuildCredentialHeaders(lookalike, token, userKey).Count == 0);
+            Check("nested lookalike receives no credentials", KoboEndpointPolicy.BuildCredentialHeaders(nestedLookalike, token, userKey).Count == 0);
+            Check("api lookalike receives no credentials", KoboEndpointPolicy.BuildCredentialHeaders(apiLookalike, token, userKey).Count == 0);
+            Check("third-party resource receives no credentials", KoboEndpointPolicy.BuildCredentialHeaders(thirdParty, token, userKey).Count == 0);
+            Check("HTTP destination receives no bearer token", KoboEndpointPolicy.BuildCredentialHeaders(new Uri("http://storeapi.kobo.com"), token, userKey).Count == 0);
+            Check("localhost is rejected", KoboEndpointPolicy.Validate(new Uri("https://localhost/resource"), KoboEndpointKind.Resource) != null);
+            Check("loopback is rejected", KoboEndpointPolicy.Validate(new Uri("https://127.0.0.1/resource"), KoboEndpointKind.Resource) != null);
+            Check("private IPv4 is rejected", KoboEndpointPolicy.Validate(new Uri("https://192.168.1.10/resource"), KoboEndpointKind.Resource) != null);
+            Check("private IPv6 is rejected", KoboEndpointPolicy.Validate(new Uri("https://[fd00::1]/resource"), KoboEndpointKind.Resource) != null);
+            Check("unsupported scheme is rejected", KoboEndpointPolicy.Validate(new Uri("file:///resource"), KoboEndpointKind.Resource) != null);
+            Check("malformed URI is rejected", KoboEndpointPolicy.Validate(KoboEndpointPolicy.CreateUri("not a URI"), KoboEndpointKind.Resource) != null);
+            Check("API lookalike is not a trusted API", KoboEndpointPolicy.Validate(apiLookalike, KoboEndpointKind.Api) != null);
+            Check("redirect destination is anonymous", KoboEndpointPolicy.BuildCredentialHeaders(thirdParty, token, userKey).Count == 0);
         }
 
         private static void SettingsTests(string root)
@@ -154,15 +188,15 @@ namespace Kapla.Tests
                 RewindSeconds = 30,
                 ForwardSeconds = 10,
                 Volume = 0.42,
-                AccentColor = "#75CFFF",
                 AppearanceMode = "Dark",
                 ShowCoverArtwork = false,
                 ProgressDisplayMode = PlaybackProgress.BookMode,
-                RememberWindowSize = true,
-                SavedWindowWidth = 777,
                 LibraryFolders = new List<string> { "one", "two" }
             };
             AppSettingsStore.Save(path, settings);
+            var serializedSettings = File.ReadAllText(path);
+            Check("obsolete window-size setting is not persisted", serializedSettings.IndexOf("RememberWindowSize", StringComparison.OrdinalIgnoreCase) < 0);
+            Check("obsolete accent setting is not persisted", serializedSettings.IndexOf("AccentColor", StringComparison.OrdinalIgnoreCase) < 0);
             var loaded = AppSettingsStore.Load(path);
             CheckEqual("settings speed round-trip", 1.5, loaded.DefaultPlaybackSpeed);
             CheckEqual("settings rewind round-trip", 30, loaded.RewindSeconds);
@@ -171,7 +205,6 @@ namespace Kapla.Tests
             CheckEqual("settings theme round-trip", "Dark", loaded.AppearanceMode);
             CheckEqual("settings cover visibility round-trip", false, loaded.ShowCoverArtwork);
             CheckEqual("settings progress mode round-trip", PlaybackProgress.BookMode, loaded.ProgressDisplayMode);
-            CheckEqual("settings window width round-trip", 777.0, loaded.SavedWindowWidth);
             File.WriteAllText(path, "not json");
             var repaired = AppSettingsStore.Load(path);
             CheckEqual("corrupt settings recover default speed", 1.0, repaired.DefaultPlaybackSpeed);
@@ -242,6 +275,7 @@ namespace Kapla.Tests
                     {
                         Title = "Library book",
                         Author = "Author",
+                        KoboEntitlementId = "entitlement-id",
                         PositionSeconds = 42,
                         Tracks = new List<KoboTrack> { new KoboTrack { Path = "book.mp3", DurationSeconds = 100 } },
                         Chapters = new List<KoboChapter> { new KoboChapter { Title = "Start", StartSeconds = 0, EndSeconds = 100 } }
@@ -254,7 +288,50 @@ namespace Kapla.Tests
             using (var stream = File.OpenRead(path)) loaded = serializer.ReadObject(stream) as LibraryStore;
             CheckEqual("library book round-trip", 1, loaded.Books.Count);
             CheckEqual("library position round-trip", 42.0, loaded.Books[0].PositionSeconds);
+            CheckEqual("library entitlement round-trip", "entitlement-id", loaded.Books[0].KoboEntitlementId);
             CheckEqual("library chapter round-trip", "Start", loaded.Books[0].Chapters[0].Title);
+
+            string serialized;
+            using (var memory = new MemoryStream())
+            {
+                serializer.WriteObject(memory, store);
+                serialized = Encoding.UTF8.GetString(memory.ToArray());
+            }
+            var entitlementField = ",\"koboEntitlementId\":\"entitlement-id\"";
+            var legacyJson = serialized.Replace(entitlementField, String.Empty);
+            LibraryStore legacyLoaded;
+            using (var memory = new MemoryStream(Encoding.UTF8.GetBytes(legacyJson)))
+            {
+                legacyLoaded = serializer.ReadObject(memory) as LibraryStore;
+            }
+            CheckEqual("legacy library without entitlement id loads", 1, legacyLoaded.Books.Count);
+            CheckEqual<string>("legacy entitlement defaults safely", null, legacyLoaded.Books[0].KoboEntitlementId);
+        }
+
+        private static void KoboCacheTests(string root)
+        {
+            var book = new KoboRemoteBook
+            {
+                ProductId = "cached-book",
+                Title = "Cached book",
+                Author = "Cached author",
+                CoverUrl = "https://cdn.example.com/cover.jpg"
+            };
+            var directory = Path.Combine(root, "KoboBooks", "cached-book");
+            Directory.CreateDirectory(directory);
+            File.WriteAllBytes(Path.Combine(directory, "000.mp3"), new byte[12000]);
+            File.WriteAllBytes(Path.Combine(directory, "001.mp3"), new byte[24000]);
+            File.WriteAllBytes(Path.Combine(directory, "cover.jpg"), new byte[] { 1, 2, 3 });
+            var restored = KoboCachedAudiobook.TryRestore(book, root);
+            Check("cached Kobo audiobook is restored", restored != null);
+            CheckEqual("cached Kobo track count", 2, restored.Tracks.Count);
+            CheckEqual("cached Kobo output is first track", "000.mp3", Path.GetFileName(restored.OutputPath));
+            CheckEqual("cached Kobo chapter count", 2, restored.Chapters.Count);
+            Check("cached Kobo duration is estimated", restored.Tracks.Sum(track => track.DurationSeconds) > 0);
+
+            File.Delete(Path.Combine(directory, "001.mp3"));
+            File.WriteAllBytes(Path.Combine(directory, "002.mp3"), new byte[24000]);
+            CheckEqual<KoboDownloadResult>("incomplete Kobo cache is rejected", null, KoboCachedAudiobook.TryRestore(book, root));
         }
 
         public static int Main(string[] args)
@@ -266,10 +343,12 @@ namespace Kapla.Tests
                 TimelineTests();
                 SleepTimerTests();
                 KoboSyncPolicyTests();
+                KoboEndpointSecurityTests();
                 SettingsTests(root);
                 MetadataTests(root);
                 KoboMetadataTests();
                 LibraryTests(root);
+                KoboCacheTests(root);
             }
             finally
             {

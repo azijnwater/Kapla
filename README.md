@@ -32,12 +32,13 @@ It is for listeners who want to:
 
 - **Kobo-first library** — connect through Kobo's device-activation flow and browse entitled audiobook titles.
 - **Native Windows player** — WPF and Windows Media Foundation, with no Electron, emulator, or web dashboard.
+- **Background playback** — keep listening while Kapla is minimized or the desktop is locked, with Windows system media controls for play, pause, seeking, and skipping.
 - **Real audiobook controls** — chapters, previous/next chapter, 15/30-second skipping, speed control, volume, and resume position.
 - **Two progress views** — track the current chapter or see progress across the whole audiobook.
 - **Automatic progress sync** — Kapla queues supported Kobo updates in the background, retries temporary failures, and never pauses playback to sync.
 - **Download feedback** — concurrent authorized imports show titles, stages, byte totals, and percentage progress.
 - **Small by default** — a compact desktop utility that can expand into the library, Kobo connection, settings, or sleep timer.
-- **Comfortable listening** — dark mode, optional cover art, window-size memory, and a sleep timer with end-of-chapter support.
+- **Comfortable listening** — light and dark themes, optional cover art, remembered window position, and a sleep timer with end-of-chapter support.
 - **Metadata that travels with the book** — title, author, narrator, series, description, artwork, duration, and chapters where Kobo or the file provides them.
 
 ## Download and install
@@ -52,7 +53,7 @@ The release includes a SHA-256 checksum. Current builds are unsigned, so Windows
 
 ## Connect Kobo
 
-Open Kapla, expand the top section, choose **Kobo**, and select **Connect**. Sign in through the device-activation flow, then return to Kapla to browse your audiobook library.
+Open Kapla, expand the top section, choose **Kobo**, and select **Connect Kobo**. Sign in through the device-activation flow, then return to Kapla to browse your audiobook library.
 
 Kapla only imports a title when Kobo returns an authorized playable download manifest. Protected titles that do not provide one remain available in Kobo's official apps.
 
@@ -94,6 +95,12 @@ Kapla stores settings, library state, downloaded authorized media, and the encry
 ```
 
 The Kobo session is protected with Windows DPAPI for the current Windows user. Credentials, account data, listening history, and audiobook files are not part of this repository. See [SECURITY.md](SECURITY.md) before reporting a security issue.
+
+Kapla never receives your Kobo password. Session credentials are only sent to the trusted Kobo API endpoint that requires them; media and CDN downloads use an anonymous request path. Disconnecting Kobo clears the local session.
+
+## Security
+
+Kapla rejects HTTP, local, private-network, and malformed resource destinations. API credentials are scoped to explicit HTTPS endpoints, redirects are followed without credentials, and tokens are never written to logs. See [SECURITY.md](SECURITY.md) for the concise security model and reporting guidance.
 
 ## Contributing
 

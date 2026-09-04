@@ -53,6 +53,7 @@ namespace Kapla
         private ContentControl expandedContentHost;
         private Border playerSurface;
         private Button libraryToggleButton;
+        private Button syncButton;
         private Button pinButton;
         private Button minimizeButton;
         private Button closeButton;
@@ -84,6 +85,8 @@ namespace Kapla
         private TextBlock syncText;
         private TextBlock syncDetailText;
         private TextBlock headerSyncText;
+        private TextBlock syncIconText;
+        private string lastKoboSyncDetail;
         private TextBlock sleepRemainingText;
         private Button sleepCancelButton;
         private Button playButton;
@@ -102,6 +105,7 @@ namespace Kapla
         private Border progressFill;
         private Border progressThumb;
         private MediaElement media;
+        private WindowsMediaControls windowsMediaControls;
         private FontFamily interFont;
         private SolidColorBrush accentBrush = Brush("#7DD3FC");
         private SolidColorBrush accentSoftBrush = Brush("#247DD3FC");
@@ -122,6 +126,7 @@ namespace Kapla
         private KoboActivation pendingKoboActivation;
         private DateTime lastKoboSyncUtc = DateTime.MinValue;
         private DateTime lastSaveUtc = DateTime.MinValue;
+        private DateTime lastWindowsTimelineUpdateUtc = DateTime.MinValue;
         private PlaybackProgressWindow currentProgressWindow;
         private DateTime nextKoboSyncAttemptUtc = DateTime.MaxValue;
         private DateTime lastKoboLibraryRefreshUtc = DateTime.MinValue;
@@ -133,26 +138,26 @@ namespace Kapla
         private bool updatingWindowLayout;
         private bool libraryExpanded;
         private bool isPinned;
-        private bool isExiting;
         private string expandedView = "library";
         private string settingsCategory = "General";
-        private HwndSource windowMessageSource;
 
-        private const double CollapsedWindowHeight = 352;
-        private const double ExpandedWindowHeight = 584;
+        private const double ArtworkWindowWidth = 560;
+        private const double CompactWindowWidth = 382;
+        private const double CollapsedWindowHeight = 300;
+        private const double ExpandedWindowHeight = 532;
         private const double ExpandedPanelHeight = 232;
         private const double ExpandedShellHeight = 532;
-        private const int WindowMessageNonClientHitTest = 0x0084;
-        private const int HitTestClient = 1;
-        private const int HitTestCaption = 2;
-        private const int HitTestLeft = 10;
-        private const int HitTestRight = 11;
-        private const int HitTestTop = 12;
-        private const int HitTestTopLeft = 13;
-        private const int HitTestTopRight = 14;
-        private const int HitTestBottom = 15;
-        private const int HitTestBottomLeft = 16;
-        private const int HitTestBottomRight = 17;
+        private const string IconAdd = "\uE710";
+        private const string IconCheck = "\uE73E";
+        private const string IconClose = "\uE8BB";
+        private const string IconDownload = "\uE896";
+        private const string IconLink = "\uE71B";
+        private const string IconMinimize = "\uE921";
+        private const string IconPin = "\uE718";
+        private const string IconPinned = "\uE840";
+        private const string IconRefresh = "\uE72C";
+        private const string IconSync = "\uE895";
+        private static readonly FontFamily ButtonIconFont = ResolveButtonIconFont();
 
         private bool IsDarkTheme
         {
@@ -172,22 +177,23 @@ namespace Kapla
             interFont = CreateInterFont();
 
             Title = "Kapla";
-            Width = appSettings.RememberWindowSize ? appSettings.SavedWindowWidth : 608;
-            Height = appSettings.RememberWindowSize ? appSettings.SavedCollapsedHeight : CollapsedWindowHeight;
-            MinWidth = appSettings.ShowCoverArtwork ? 608 : 430;
-            MinHeight = 320;
-            MaxHeight = 420;
+            Width = appSettings.ShowCoverArtwork ? ArtworkWindowWidth : CompactWindowWidth;
+            Height = CollapsedWindowHeight;
+            MinWidth = Width;
+            MaxWidth = Width;
+            MinHeight = CollapsedWindowHeight;
+            MaxHeight = CollapsedWindowHeight;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             WindowStyle = WindowStyle.None;
-            ResizeMode = ResizeMode.CanResizeWithGrip;
+            ResizeMode = ResizeMode.NoResize;
             AllowsTransparency = true;
             Background = Brushes.Transparent;
             Foreground = Brush("#261D1B");
             FontFamily = interFont;
             UseLayoutRounding = true;
             SnapsToDevicePixels = true;
-            isPinned = appSettings.AlwaysOnTopByDefault;
-            Topmost = isPinned;
+            isPinned = false;
+            Topmost = false;
             Icon = CreateApplicationIcon();
 
             BuildLayout();
@@ -250,11 +256,15 @@ namespace Kapla
 
         private void MainWindowOnSourceInitialized(object sender, EventArgs e)
         {
-            windowMessageSource = PresentationSource.FromVisual(this) as HwndSource;
-            if (windowMessageSource != null)
-            {
-                windowMessageSource.AddHook(WindowMessageHook);
-            }
+            windowsMediaControls = WindowsMediaControls.TryCreate(new WindowInteropHelper(this).Handle, Dispatcher);
+            windowsMediaControls.PlayRequested += delegate { if (!isPlaying) PlayCurrent(); };
+            windowsMediaControls.PauseRequested += PauseCurrent;
+            windowsMediaControls.SkipBackRequested += delegate { Skip(-appSettings.RewindSeconds); };
+            windowsMediaControls.SkipForwardRequested += delegate { Skip(appSettings.ForwardSeconds); };
+            windowsMediaControls.SeekRequested += delegate(double seconds) { SeekToGlobal(seconds, isPlaying); };
+            UpdateWindowsMediaMetadata();
+            UpdateWindowsMediaPlaybackState();
+            UpdateWindowsMediaTimeline();
         }
 
         private void MainWindowOnClosed(object sender, EventArgs e)
@@ -262,10 +272,10 @@ namespace Kapla
             NetworkChange.NetworkAvailabilityChanged -= NetworkAvailabilityChanged;
             progressTimer.Stop();
             koboSyncTimer.Stop();
-            if (windowMessageSource != null)
+            if (windowsMediaControls != null)
             {
-                windowMessageSource.RemoveHook(WindowMessageHook);
-                windowMessageSource = null;
+                windowsMediaControls.Dispose();
+                windowsMediaControls = null;
             }
         }
 
@@ -275,12 +285,6 @@ namespace Kapla
             SaveLibrary();
             SaveWindowPosition();
             SaveSettings();
-            if (appSettings.MinimizeOnClose && !isExiting)
-            {
-                e.Cancel = true;
-                WindowState = WindowState.Minimized;
-                return;
-            }
             if (koboClient != null)
             {
                 koboClient.Dispose();
@@ -300,7 +304,7 @@ namespace Kapla
                 CornerRadius = new CornerRadius(18),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(0, 0, 0, 38),
+                Margin = new Thickness(0),
                 Effect = new DropShadowEffect
                 {
                     Color = Color.FromRgb(26, 17, 17),
@@ -320,7 +324,7 @@ namespace Kapla
                 CornerRadius = new CornerRadius(18),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(0, 0, 0, 38)
+                Margin = new Thickness(0)
             };
 
             cardLayout = new Grid { Height = 300, ClipToBounds = true };
@@ -342,7 +346,7 @@ namespace Kapla
             librarySurface.Height = ExpandedPanelHeight;
             librarySurface.HorizontalAlignment = HorizontalAlignment.Center;
             librarySurface.VerticalAlignment = VerticalAlignment.Top;
-            librarySurface.Margin = new Thickness(0, 14, 0, 0);
+            librarySurface.Margin = new Thickness(0);
             librarySurface.Visibility = Visibility.Collapsed;
             rootLayout.Children.Add(librarySurface);
 
@@ -378,12 +382,9 @@ namespace Kapla
             appCard.CornerRadius = libraryExpanded ? new CornerRadius(0, 0, 18, 18) : new CornerRadius(18);
             appCard.BorderBrush = libraryExpanded ? Brush("#101A1111") : Brushes.Transparent;
             appCard.BorderThickness = libraryExpanded ? new Thickness(0, 1, 0, 0) : new Thickness(0);
-            var targetHeight = libraryExpanded
-                ? (appSettings.RememberWindowSize ? appSettings.SavedExpandedHeight : ExpandedWindowHeight)
-                : (appSettings.RememberWindowSize ? appSettings.SavedCollapsedHeight : CollapsedWindowHeight);
-            targetHeight = libraryExpanded ? Math.Max(584, targetHeight) : Math.Max(320, Math.Min(420, targetHeight));
-            MinHeight = libraryExpanded ? 584 : 320;
-            MaxHeight = libraryExpanded ? Double.PositiveInfinity : 420;
+            var targetHeight = libraryExpanded ? ExpandedWindowHeight : CollapsedWindowHeight;
+            MinHeight = targetHeight;
+            MaxHeight = targetHeight;
             Height = targetHeight;
             Top = anchoredBottom - Height;
             UpdateResponsiveLayout();
@@ -432,14 +433,34 @@ namespace Kapla
             Canvas.SetTop(brand, 5);
             headerCanvas.Children.Add(brand);
 
+            syncIconText = BuildSyncIcon();
+            syncButton = MakeMicroHeaderButton(syncIconText, "Sync Kobo now");
+            var syncSurface = syncButton.Content as Border;
+            if (syncSurface != null)
+            {
+                syncSurface.Background = Brushes.Transparent;
+                syncSurface.CornerRadius = new CornerRadius(0);
+            }
+            System.Windows.Automation.AutomationProperties.SetName(syncButton, "Sync Kobo now");
+            syncButton.Click += SyncButtonOnClick;
+            Canvas.SetLeft(syncButton, 64);
+            Canvas.SetTop(syncButton, 5);
+            headerCanvas.Children.Add(syncButton);
+
             headerSyncText = FigmaText("", 8, FontWeights.Medium, Brush("#8A7E7A"));
-            headerSyncText.Width = 170;
+            headerSyncText.Width = 156;
             headerSyncText.Height = 14;
-            Canvas.SetLeft(headerSyncText, 72);
+            Canvas.SetLeft(headerSyncText, 86);
             Canvas.SetTop(headerSyncText, 6);
             headerCanvas.Children.Add(headerSyncText);
 
             libraryToggleButton = MakeHeaderButton(MakeChevronIcon(true), "Show audiobook library");
+            var expandSurface = libraryToggleButton.Content as Border;
+            if (expandSurface != null)
+            {
+                expandSurface.Background = Brushes.Transparent;
+                expandSurface.CornerRadius = new CornerRadius(0);
+            }
             System.Windows.Automation.AutomationProperties.SetName(libraryToggleButton, "Expand library");
             libraryToggleButton.Click += delegate { ToggleLibraryExpanded(); };
             headerCanvas.Children.Add(libraryToggleButton);
@@ -448,12 +469,12 @@ namespace Kapla
             pinButton.Click += delegate { TogglePin(); };
             Canvas.SetTop(pinButton, 5);
             headerCanvas.Children.Add(pinButton);
-            minimizeButton = MakeMicroHeaderButton(BuildWindowGlyph("—"), "Minimize Kapla");
+            minimizeButton = MakeMicroHeaderButton(BuildWindowGlyph(IconMinimize), "Minimize Kapla");
             System.Windows.Automation.AutomationProperties.SetName(minimizeButton, "Minimize");
             minimizeButton.Click += delegate { WindowState = WindowState.Minimized; };
             Canvas.SetTop(minimizeButton, 5);
             headerCanvas.Children.Add(minimizeButton);
-            closeButton = MakeMicroHeaderButton(BuildWindowGlyph("×"), "Close Kapla");
+            closeButton = MakeMicroHeaderButton(BuildWindowGlyph(IconClose), "Close Kapla");
             System.Windows.Automation.AutomationProperties.SetName(closeButton, "Close");
             closeButton.Click += delegate { Close(); };
             Canvas.SetTop(closeButton, 5);
@@ -466,17 +487,25 @@ namespace Kapla
 
         private UIElement BuildWindowGlyph(string glyph)
         {
-            return new TextBlock
+            return MakeButtonIcon(glyph, 10, IsDarkTheme ? Brush("#DCE3EA") : Brush("#741A1111"));
+        }
+
+        private TextBlock BuildSyncIcon()
+        {
+            var icon = new TextBlock
             {
-                Text = glyph,
-                FontFamily = new FontFamily("Segoe UI"),
-                FontSize = glyph == "×" ? 13 : 11,
-                FontWeight = FontWeights.Medium,
-                Foreground = IsDarkTheme ? Brush("#DCE3EA") : Brush("#741A1111"),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = glyph == "—" ? new Thickness(0, -4, 0, 0) : new Thickness(0, -1, 0, 0)
+                Text = IconSync,
+                FontFamily = ButtonIconFont,
+                FontSize = 11,
+                Foreground = IsDarkTheme ? Brush("#AAB3BD") : Brush("#6F625E"),
+                Width = 16,
+                Height = 16,
+                TextAlignment = TextAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
             };
+            icon.RenderTransformOrigin = new Point(0.5, 0.5);
+            icon.RenderTransform = new RotateTransform(0);
+            return icon;
         }
 
         private void UpdateResponsiveLayout()
@@ -488,8 +517,18 @@ namespace Kapla
             updatingWindowLayout = true;
             try
             {
-                var availableWidth = Math.Max(appSettings.ShowCoverArtwork ? 560 : 382, ActualWidth - 48);
-                var surfaceWidth = Math.Min(760, availableWidth);
+                var surfaceWidth = appSettings.ShowCoverArtwork ? ArtworkWindowWidth : CompactWindowWidth;
+                if (WindowState == WindowState.Normal && Math.Abs(Width - surfaceWidth) > 0.1)
+                {
+                    var right = !Double.IsNaN(Left) && ActualWidth > 0 ? Left + ActualWidth : Double.NaN;
+                    Width = surfaceWidth;
+                    if (!Double.IsNaN(right))
+                    {
+                        Left = right - surfaceWidth;
+                    }
+                }
+                MinWidth = surfaceWidth;
+                MaxWidth = surfaceWidth;
                 shellSurface.Width = surfaceWidth;
                 appCard.Width = surfaceWidth;
                 librarySurface.Width = surfaceWidth;
@@ -504,16 +543,15 @@ namespace Kapla
                     Canvas.SetLeft(closeButton, headerWidth - 16);
                     if (headerSyncText != null)
                     {
-                        headerSyncText.Width = Math.Max(40, headerWidth - 182);
+                        headerSyncText.Width = Math.Max(32, headerWidth - 182);
                     }
                 }
                 ApplyCoverVisibility(false);
 
                 if (libraryExpanded)
                 {
-                    var panelHeight = Math.Max(168, ActualHeight - 352);
-                    librarySurface.Height = panelHeight;
-                    shellSurface.Height = 300 + panelHeight;
+                    librarySurface.Height = ExpandedPanelHeight;
+                    shellSurface.Height = ExpandedShellHeight;
                 }
                 else
                 {
@@ -534,7 +572,6 @@ namespace Kapla
                 return;
             }
             var show = appSettings.ShowCoverArtwork;
-            MinWidth = show ? 608 : 430;
             coverBorder.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
             playerSurface.Width = show ? 504 : 330;
             playerCanvas.Width = show ? 504 : 330;
@@ -726,14 +763,14 @@ namespace Kapla
             navigation.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             libraryTabButton = MakePanelTabButton("Library", "library");
             navigation.Children.Add(libraryTabButton);
-            settingsTabButton = MakePanelTabButton("Settings", "settings");
-            settingsTabButton.Margin = new Thickness(6, 0, 0, 0);
-            Grid.SetColumn(settingsTabButton, 1);
-            navigation.Children.Add(settingsTabButton);
             koboTabButton = MakePanelTabButton("Kobo", "kobo");
             koboTabButton.Margin = new Thickness(6, 0, 0, 0);
-            Grid.SetColumn(koboTabButton, 2);
+            Grid.SetColumn(koboTabButton, 1);
             navigation.Children.Add(koboTabButton);
+            settingsTabButton = MakePanelTabButton("Settings", "settings");
+            settingsTabButton.Margin = new Thickness(6, 0, 0, 0);
+            Grid.SetColumn(settingsTabButton, 2);
+            navigation.Children.Add(settingsTabButton);
             connectKoboButton = MakeHeaderButton(MakePlusIcon(), "Add an audiobook");
             connectKoboButton.Click += delegate { ShowAddMenu(connectKoboButton); };
             Grid.SetColumn(connectKoboButton, 4);
@@ -941,11 +978,12 @@ namespace Kapla
         {
             var template = new DataTemplate(typeof(BookEntry));
             var stack = new FrameworkElementFactory(typeof(StackPanel));
-            stack.SetValue(StackPanel.WidthProperty, 76.0);
+            stack.SetValue(StackPanel.WidthProperty, 110.0);
 
             var cover = new FrameworkElementFactory(typeof(Border));
-            cover.SetValue(FrameworkElement.WidthProperty, 76.0);
-            cover.SetValue(FrameworkElement.HeightProperty, 102.0);
+            cover.SetValue(FrameworkElement.WidthProperty, 90.0);
+            cover.SetValue(FrameworkElement.HeightProperty, 120.0);
+            cover.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             cover.SetValue(Border.BackgroundProperty, Brush("#DDF3FC"));
             cover.SetValue(Border.CornerRadiusProperty, new CornerRadius(7));
             cover.SetValue(Border.ClipToBoundsProperty, true);
@@ -962,8 +1000,8 @@ namespace Kapla
             var image = new FrameworkElementFactory(typeof(Image));
             image.SetBinding(Image.SourceProperty, new Binding("CoverSource"));
             image.SetValue(Image.StretchProperty, Stretch.UniformToFill);
-            image.SetValue(Image.WidthProperty, 76.0);
-            image.SetValue(Image.HeightProperty, 102.0);
+            image.SetValue(Image.WidthProperty, 90.0);
+            image.SetValue(Image.HeightProperty, 120.0);
             coverLayers.AppendChild(image);
             cover.AppendChild(coverLayers);
             stack.AppendChild(cover);
@@ -971,13 +1009,31 @@ namespace Kapla
             var title = new FrameworkElementFactory(typeof(TextBlock));
             title.SetBinding(TextBlock.TextProperty, new Binding("Title"));
             title.SetValue(TextBlock.FontFamilyProperty, interFont);
-            title.SetValue(TextBlock.FontSizeProperty, 8.5);
+            title.SetValue(TextBlock.FontSizeProperty, 9.0);
             title.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
             title.SetValue(TextBlock.ForegroundProperty, Brush("#1A1111"));
-            title.SetValue(TextBlock.WidthProperty, 76.0);
+            title.SetValue(TextBlock.WidthProperty, 110.0);
             title.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
             title.SetValue(TextBlock.MarginProperty, new Thickness(0, 4, 0, 0));
             stack.AppendChild(title);
+
+            var author = new FrameworkElementFactory(typeof(TextBlock));
+            author.SetBinding(TextBlock.TextProperty, new Binding("Author"));
+            author.SetValue(TextBlock.FontFamilyProperty, interFont);
+            author.SetValue(TextBlock.FontSizeProperty, 8.0);
+            author.SetValue(TextBlock.ForegroundProperty, Brush("#8A7E7A"));
+            author.SetValue(TextBlock.WidthProperty, 110.0);
+            author.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            stack.AppendChild(author);
+
+            var progress = new FrameworkElementFactory(typeof(TextBlock));
+            progress.SetBinding(TextBlock.TextProperty, new Binding("ProgressText"));
+            progress.SetValue(TextBlock.FontFamilyProperty, interFont);
+            progress.SetValue(TextBlock.FontSizeProperty, 7.5);
+            progress.SetValue(TextBlock.ForegroundProperty, accentBrush);
+            progress.SetValue(TextBlock.WidthProperty, 110.0);
+            progress.SetValue(TextBlock.MarginProperty, new Thickness(0, 2, 0, 0));
+            stack.AppendChild(progress);
             template.VisualTree = stack;
             return template;
         }
@@ -1015,17 +1071,17 @@ namespace Kapla
             var root = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             root.Children.Add(FigmaText("Add to Kapla", 12, FontWeights.Bold, Brush("#1A1111")));
             var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
-            var local = MakeCompactActionButton("Choose local audiobook…", true);
+            var local = MakeCompactActionButton("Choose local audiobook…", true, IconAdd);
             local.Click += delegate { ImportLocalAudiobook(); };
             row.Children.Add(local);
-            var kobo = MakeCompactActionButton("Open Kobo library", false);
+            var kobo = MakeCompactActionButton("Open Kobo library", false, IconLink);
             kobo.Margin = new Thickness(8, 0, 0, 0);
             kobo.Click += delegate { EnsureExpanded("kobo"); };
             row.Children.Add(kobo);
             root.Children.Add(row);
             root.Children.Add(new TextBlock
             {
-                Text = "Local files use embedded artwork and chapters when present. Kobo credentials remain encrypted for this Windows user.",
+                Text = "Local files use embedded artwork and chapters when present. Kobo titles appear in the Kobo tab.",
                 FontFamily = interFont,
                 FontSize = 9,
                 Foreground = Brush("#8A7E7A"),
@@ -1053,11 +1109,6 @@ namespace Kapla
             Action<string> activate = null;
             activate = delegate(string category)
             {
-                if (String.Equals(category, "Account", StringComparison.Ordinal))
-                {
-                    ShowExpandedView("kobo");
-                    return;
-                }
                 settingsCategory = category;
                 foreach (var entry in categoryButtons)
                 {
@@ -1066,7 +1117,7 @@ namespace Kapla
                 content.Content = BuildSettingsCategoryContent(category);
             };
 
-            foreach (var name in new[] { "General", "Playback", "Library", "Appearance", "Account" })
+            foreach (var name in new[] { "General", "Playback", "Library", "Appearance" })
             {
                 var categoryName = name;
                 var button = MakeSettingsCategoryButton(categoryName);
@@ -1133,29 +1184,15 @@ namespace Kapla
             var left = new StackPanel();
             left.Children.Add(MakeSettingsSectionLabel("WINDOW"));
             left.Children.Add(MakeCompactSettingsCheck("Remember window position", appSettings.RememberWindowPosition, value => appSettings.RememberWindowPosition = value));
-            left.Children.Add(MakeCompactSettingsCheck("Remember window size", appSettings.RememberWindowSize, value => appSettings.RememberWindowSize = value));
-            left.Children.Add(MakeCompactSettingsCheck("Always on top by default", appSettings.AlwaysOnTopByDefault, value =>
-            {
-                appSettings.AlwaysOnTopByDefault = value;
-                isPinned = value;
-                Topmost = value;
-                UpdatePinVisual();
-            }));
 
             var right = new StackPanel();
-            right.Children.Add(MakeSettingsSectionLabel("STARTUP & CLOSE"));
+            right.Children.Add(MakeSettingsSectionLabel("STARTUP"));
             right.Children.Add(MakeCompactSettingsCheck("Launch Kapla at startup", appSettings.LaunchAtStartup, value =>
             {
                 appSettings.LaunchAtStartup = value;
                 ApplyLaunchAtStartup();
             }));
             right.Children.Add(MakeCompactSettingsCheck("Resume last audiobook", appSettings.ResumeLastAudiobook, value => appSettings.ResumeLastAudiobook = value));
-            right.Children.Add(MakeCompactSettingsCheck("Close minimizes to taskbar", appSettings.MinimizeOnClose, value => appSettings.MinimizeOnClose = value));
-            var exit = MakeCompactActionButton("Exit Kapla", false);
-            exit.HorizontalAlignment = HorizontalAlignment.Left;
-            exit.Margin = new Thickness(0, 3, 0, 0);
-            exit.Click += delegate { isExiting = true; Close(); };
-            right.Children.Add(exit);
             return MakeSettingsColumns(left, right);
         }
 
@@ -1188,9 +1225,50 @@ namespace Kapla
                 appSettings.ProgressDisplayMode = value;
                 if (currentBook != null) UpdateProgressDisplay(CurrentAbsolutePosition());
             }));
-            right.Children.Add(MakeCompactSettingsValue("Sleep", new[] { "15 minutes", "30 minutes", "45 minutes", "60 minutes" }, appSettings.DefaultSleepMinutes + " minutes", value => appSettings.DefaultSleepMinutes = ParseLeadingInt(value, 30)));
+            right.Children.Add(BuildSleepTimerSettingsControl());
             right.Children.Add(MakeCompactVolumeRow());
             return MakeSettingsColumns(left, right);
+        }
+
+        private UIElement BuildSleepTimerSettingsControl()
+        {
+            var root = new StackPanel { Margin = new Thickness(0, 3, 0, 2) };
+            var heading = new Grid();
+            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            heading.Children.Add(MakeSettingsLabel("Sleep timer"));
+            sleepRemainingText = FigmaText("Off", 8.5, FontWeights.SemiBold, accentBrush);
+            Grid.SetColumn(sleepRemainingText, 1);
+            heading.Children.Add(sleepRemainingText);
+            root.Children.Add(heading);
+
+            var presets = new WrapPanel { Margin = new Thickness(0, 3, 0, 0) };
+            foreach (var minutes in new[] { 5, 15, 30, 60 })
+            {
+                var value = minutes;
+                var button = MakeCompactActionButton(value + " min", false);
+                button.Height = 22;
+                button.Padding = new Thickness(7, 2, 7, 2);
+                button.Margin = new Thickness(0, 0, 4, 4);
+                button.Click += delegate { StartSleepTimer(value); };
+                presets.Children.Add(button);
+            }
+            var end = MakeCompactActionButton("End chapter", false);
+            end.Height = 22;
+            end.Padding = new Thickness(7, 2, 7, 2);
+            end.Margin = new Thickness(0, 0, 4, 4);
+            end.IsEnabled = CurrentChapterEndSeconds().HasValue;
+            end.Click += delegate { StartSleepTimerAtChapterEnd(); };
+            presets.Children.Add(end);
+            sleepCancelButton = MakeCompactActionButton("Cancel", false);
+            sleepCancelButton.Height = 22;
+            sleepCancelButton.Padding = new Thickness(7, 2, 7, 2);
+            sleepCancelButton.Margin = new Thickness(0, 0, 4, 4);
+            sleepCancelButton.IsEnabled = sleepTimer.IsActive;
+            sleepCancelButton.Click += delegate { CancelSleepTimer("Sleep timer cancelled."); };
+            presets.Children.Add(sleepCancelButton);
+            root.Children.Add(presets);
+            return root;
         }
 
         private UIElement BuildLibrarySettingsContent()
@@ -1235,11 +1313,11 @@ namespace Kapla
             choices.Children.Add(MakeCompactSettingsValue("Metadata", new[] { "Embedded metadata first" }, appSettings.PreferredMetadataSource, value => appSettings.PreferredMetadataSource = value));
             lower.Children.Add(choices);
             var actions = new StackPanel();
-            var rescan = MakeCompactActionButton("Rescan library folders", true);
+            var rescan = MakeCompactActionButton("Rescan library folders", true, IconRefresh);
             rescan.HorizontalAlignment = HorizontalAlignment.Left;
             rescan.Click += async delegate { await RescanLibraryFoldersAsync(); };
             actions.Children.Add(rescan);
-            var refresh = MakeCompactActionButton("Refresh metadata + covers", false);
+            var refresh = MakeCompactActionButton("Refresh metadata + covers", false, IconSync);
             refresh.HorizontalAlignment = HorizontalAlignment.Left;
             refresh.Margin = new Thickness(0, 5, 0, 0);
             refresh.Click += async delegate { await RefreshAllMetadataAsync(); };
@@ -1536,42 +1614,40 @@ namespace Kapla
         private UIElement BuildKoboView()
         {
             var root = new Grid();
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(34) });
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(29) });
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(27) });
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
             var accountRow = new Grid();
             accountRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             accountRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             accountRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            accountRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             koboAccountStatusText = new TextBlock
             {
                 Text = KoboAccountStatus(),
                 FontFamily = interFont,
-                FontSize = 9.5,
+                FontSize = 8.5,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = Brush("#1A1111"),
                 VerticalAlignment = VerticalAlignment.Center,
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
-            accountRow.Children.Add(koboAccountStatusText);
-            var connect = MakeCompactActionButton(koboClient == null ? "Connect" : "Refresh library", true);
+            var accountSummary = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            accountSummary.Children.Add(MakeSettingsSectionLabel("KOBO"));
+            accountSummary.Children.Add(koboAccountStatusText);
+            accountRow.Children.Add(accountSummary);
+            var connect = MakeCompactActionButton(koboClient == null ? "Connect Kobo" : "Sync library", true,
+                koboClient == null ? IconLink : IconRefresh);
             connect.Click += delegate { ConnectKobo(); };
             Grid.SetColumn(connect, 1);
             accountRow.Children.Add(connect);
-            var disconnect = MakeCompactActionButton("Disconnect", false);
+            var disconnect = MakeCompactActionButton("Disconnect", false, IconClose);
             disconnect.Margin = new Thickness(6, 0, 0, 0);
             disconnect.IsEnabled = koboSession != null;
+            disconnect.Visibility = koboSession == null ? Visibility.Collapsed : Visibility.Visible;
             disconnect.Click += delegate { DisconnectKobo(); };
             Grid.SetColumn(disconnect, 2);
             accountRow.Children.Add(disconnect);
-            importKoboButton = MakeCompactActionButton("Import selected", false);
-            importKoboButton.Margin = new Thickness(6, 0, 0, 0);
-            importKoboButton.IsEnabled = false;
-            importKoboButton.Click += async delegate { await ImportSelectedKoboBookAsync(); };
-            Grid.SetColumn(importKoboButton, 3);
-            accountRow.Children.Add(importKoboButton);
             root.Children.Add(accountRow);
 
             var activityRow = new Grid();
@@ -1579,7 +1655,13 @@ namespace Kapla
             activityRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             koboActivationCodeText = new TextBlock
             {
-                Text = pendingKoboActivation == null ? "Tokens are encrypted with Windows user protection." : "Activation code: " + pendingKoboActivation.Code + " • visit kobo.com/activate",
+                Text = pendingKoboActivation != null
+                    ? "Code " + pendingKoboActivation.Code + " copied — enter it at kobo.com/activate"
+                    : !String.IsNullOrWhiteSpace(lastKoboSyncDetail)
+                        ? lastKoboSyncDetail
+                        : koboClient == null
+                            ? "Connect once to browse and download your Kobo audiobooks."
+                            : "Select an audiobook below, then download it to Kapla.",
                 FontFamily = interFont,
                 FontSize = 8.5,
                 Foreground = Brush("#8A7E7A"),
@@ -1587,11 +1669,17 @@ namespace Kapla
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
             activityRow.Children.Add(koboActivationCodeText);
-            completeActivationButton = MakeCompactActionButton("I entered the code", false);
+            completeActivationButton = MakeCompactActionButton("Done", true, IconCheck);
             completeActivationButton.Visibility = pendingKoboActivation == null ? Visibility.Collapsed : Visibility.Visible;
             completeActivationButton.Click += async delegate { await CompleteKoboActivationAsync(); };
             Grid.SetColumn(completeActivationButton, 1);
             activityRow.Children.Add(completeActivationButton);
+            importKoboButton = MakeCompactActionButton("Download selected", false, IconDownload);
+            importKoboButton.IsEnabled = false;
+            importKoboButton.Visibility = pendingKoboActivation == null && koboClient != null ? Visibility.Visible : Visibility.Collapsed;
+            importKoboButton.Click += async delegate { await ImportSelectedKoboBookAsync(); };
+            Grid.SetColumn(importKoboButton, 1);
+            activityRow.Children.Add(importKoboButton);
             Grid.SetRow(activityRow, 1);
             root.Children.Add(activityRow);
 
@@ -1649,35 +1737,58 @@ namespace Kapla
         {
             var template = new DataTemplate(typeof(KoboRemoteBook));
             var stack = new FrameworkElementFactory(typeof(StackPanel));
-            stack.SetValue(StackPanel.WidthProperty, 66.0);
+            stack.SetValue(StackPanel.WidthProperty, 142.0);
             var cover = new FrameworkElementFactory(typeof(Border));
-            cover.SetValue(Border.WidthProperty, 66.0);
-            cover.SetValue(Border.HeightProperty, 88.0);
+            cover.SetValue(Border.WidthProperty, 92.0);
+            cover.SetValue(Border.HeightProperty, 122.0);
+            cover.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             cover.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
             cover.SetValue(Border.BackgroundProperty, Brush("#DDF3FC"));
             cover.SetValue(Border.ClipToBoundsProperty, true);
+            var coverLayers = new FrameworkElementFactory(typeof(Grid));
+            var placeholder = new FrameworkElementFactory(typeof(TextBlock));
+            placeholder.SetValue(TextBlock.TextProperty, "K");
+            placeholder.SetValue(TextBlock.FontFamilyProperty, interFont);
+            placeholder.SetValue(TextBlock.FontSizeProperty, 22.0);
+            placeholder.SetValue(TextBlock.FontWeightProperty, FontWeights.Bold);
+            placeholder.SetValue(TextBlock.ForegroundProperty, Brush("#5FAED2"));
+            placeholder.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            placeholder.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            coverLayers.AppendChild(placeholder);
             var image = new FrameworkElementFactory(typeof(Image));
             image.SetBinding(Image.SourceProperty, new Binding("CoverUrl"));
             image.SetValue(Image.StretchProperty, Stretch.UniformToFill);
-            cover.AppendChild(image);
+            image.SetValue(Image.WidthProperty, 92.0);
+            image.SetValue(Image.HeightProperty, 122.0);
+            coverLayers.AppendChild(image);
+            cover.AppendChild(coverLayers);
             stack.AppendChild(cover);
             var title = new FrameworkElementFactory(typeof(TextBlock));
             title.SetBinding(TextBlock.TextProperty, new Binding("Title"));
-            title.SetValue(TextBlock.WidthProperty, 66.0);
+            title.SetValue(TextBlock.WidthProperty, 142.0);
             title.SetValue(TextBlock.FontFamilyProperty, interFont);
-            title.SetValue(TextBlock.FontSizeProperty, 8.0);
+            title.SetValue(TextBlock.FontSizeProperty, 9.0);
             title.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
             title.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
             title.SetValue(TextBlock.MarginProperty, new Thickness(0, 3, 0, 0));
             stack.AppendChild(title);
             var author = new FrameworkElementFactory(typeof(TextBlock));
             author.SetBinding(TextBlock.TextProperty, new Binding("Author"));
-            author.SetValue(TextBlock.WidthProperty, 66.0);
+            author.SetValue(TextBlock.WidthProperty, 142.0);
             author.SetValue(TextBlock.FontFamilyProperty, interFont);
-            author.SetValue(TextBlock.FontSizeProperty, 7.0);
+            author.SetValue(TextBlock.FontSizeProperty, 8.0);
             author.SetValue(TextBlock.ForegroundProperty, Brush("#8A7E7A"));
             author.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
             stack.AppendChild(author);
+            var status = new FrameworkElementFactory(typeof(TextBlock));
+            status.SetBinding(TextBlock.TextProperty, new Binding("StatusText"));
+            status.SetValue(TextBlock.WidthProperty, 142.0);
+            status.SetValue(TextBlock.FontFamilyProperty, interFont);
+            status.SetValue(TextBlock.FontSizeProperty, 7.5);
+            status.SetValue(TextBlock.ForegroundProperty, accentBrush);
+            status.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            status.SetValue(TextBlock.MarginProperty, new Thickness(0, 2, 0, 0));
+            stack.AppendChild(status);
             template.VisualTree = stack;
             return template;
         }
@@ -1686,9 +1797,9 @@ namespace Kapla
         {
             if (koboSession == null || String.IsNullOrWhiteSpace(koboSession.AccessToken))
             {
-                return "Kobo account not connected";
+                return "Not connected";
             }
-            return String.IsNullOrWhiteSpace(koboSession.Email) ? "Kobo account connected" : "Connected as " + koboSession.Email;
+            return String.IsNullOrWhiteSpace(koboSession.Email) ? "Connected" : "Connected · " + koboSession.Email;
         }
 
         private void SaveSettings()
@@ -1903,7 +2014,6 @@ namespace Kapla
         {
             accentBrush = Brush(IsDarkTheme ? "#55B8F6" : "#7DD3FC");
             accentSoftBrush = WithOpacity(accentBrush.Color, IsDarkTheme ? 0.20 : 0.14);
-            appSettings.AccentColor = accentBrush.Color.ToString();
             SvgIconFactory.AccentColor = accentBrush.Color;
             Foreground = IsDarkTheme ? Brush("#F4F0EC") : Brush("#261D1B");
             if (shellSurface != null)
@@ -1921,8 +2031,9 @@ namespace Kapla
             if (playButton != null && playButton.Content is Border) ((Border)playButton.Content).Background = BuildPlayButtonBrush();
             if (speedButton != null) speedButton.Content = MakeSpeedContent(speedBox == null || speedBox.SelectedItem == null ? "1.0x" : speedBox.SelectedItem.ToString());
             if (brandIcon != null) brandIcon.Background = BuildBrandBrush();
-            if (minimizeButton != null) minimizeButton.Content = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(5), Background = Brushes.Transparent, Child = BuildWindowGlyph("—") };
-            if (closeButton != null) closeButton.Content = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(5), Background = Brushes.Transparent, Child = BuildWindowGlyph("×") };
+            if (minimizeButton != null) minimizeButton.Content = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(5), Background = Brushes.Transparent, Child = BuildWindowGlyph(IconMinimize) };
+            if (closeButton != null) closeButton.Content = new Border { Width = 16, Height = 16, CornerRadius = new CornerRadius(5), Background = Brushes.Transparent, Child = BuildWindowGlyph(IconClose) };
+            if (syncIconText != null) syncIconText.Foreground = IsDarkTheme ? Brush("#AAB3BD") : Brush("#6F625E");
             UpdatePinVisual();
             SetPanelTabState(libraryTabButton, expandedView == "library");
             SetPanelTabState(settingsTabButton, expandedView == "settings");
@@ -2036,11 +2147,11 @@ namespace Kapla
             pinButton.ToolTip = isPinned ? "Unpin Kapla" : "Keep Kapla on top";
         }
 
-        private Button MakeCompactActionButton(string label, bool primary)
+        private Button MakeCompactActionButton(string label, bool primary, string iconGlyph = null)
         {
             var button = new Button
             {
-                Content = label,
+                Content = String.IsNullOrWhiteSpace(iconGlyph) ? (object)label : MakeIconLabel(iconGlyph, label, primary),
                 Height = 26,
                 Padding = new Thickness(11, 3, 11, 3),
                 BorderThickness = new Thickness(1),
@@ -2055,6 +2166,47 @@ namespace Kapla
             };
             AttachMicroInteraction(button, 1.025);
             return button;
+        }
+
+        private UIElement MakeIconLabel(string glyph, string label, bool primary)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            row.Children.Add(MakeButtonIcon(glyph, 10, primary ? Brush("#17384A") : Brush("#1A1111")));
+            row.Children.Add(new TextBlock
+            {
+                Text = label,
+                FontFamily = interFont,
+                FontSize = 9,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = primary ? Brush("#17384A") : Brush("#1A1111"),
+                Margin = new Thickness(5, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            return row;
+        }
+
+        private static TextBlock MakeButtonIcon(string glyph, double size, Brush foreground)
+        {
+            return new TextBlock
+            {
+                Text = glyph,
+                FontFamily = ButtonIconFont,
+                FontSize = size,
+                FontWeight = FontWeights.Normal,
+                Foreground = foreground,
+                TextAlignment = TextAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsHitTestVisible = false
+            };
+        }
+
+        private static FontFamily ResolveButtonIconFont()
+        {
+            return Fonts.SystemFontFamilies.Any(font =>
+                String.Equals(font.Source, "Segoe Fluent Icons", StringComparison.OrdinalIgnoreCase))
+                ? new FontFamily("Segoe Fluent Icons")
+                : new FontFamily("Segoe MDL2 Assets");
         }
 
         private UIElement BuildFigmaPlayerPanel()
@@ -2400,16 +2552,7 @@ namespace Kapla
 
         private static UIElement MakePlusIcon()
         {
-            var canvas = new Canvas { Width = 12, Height = 12 };
-            var horizontal = new Border { Width = 10, Height = 1.5, Background = Brush("#881A1111"), CornerRadius = new CornerRadius(1) };
-            Canvas.SetLeft(horizontal, 1);
-            Canvas.SetTop(horizontal, 5.25);
-            canvas.Children.Add(horizontal);
-            var vertical = new Border { Width = 1.5, Height = 10, Background = Brush("#881A1111"), CornerRadius = new CornerRadius(1) };
-            Canvas.SetLeft(vertical, 5.25);
-            Canvas.SetTop(vertical, 1);
-            canvas.Children.Add(vertical);
-            return new Viewbox { Width = 12, Height = 12, Child = canvas };
+            return MakeButtonIcon(IconAdd, 11, Brush("#881A1111"));
         }
 
         private Button MakeMicroHeaderButton(UIElement icon, string tooltip)
@@ -2439,24 +2582,13 @@ namespace Kapla
 
         private UIElement BuildPinIcon(bool pinned)
         {
-            var canvas = new Canvas { Width = 10, Height = 10 };
-            var path = new System.Windows.Shapes.Path
-            {
-                Data = Geometry.Parse("M3.2,1.2 L6.8,1.2 L6.1,3.5 L7.8,5.2 L5.6,5.7 L5,8.8 L4.4,5.7 L2.2,5.2 L3.9,3.5 Z"),
-                Fill = pinned ? accentBrush : Brush("#741A1111"),
-                Stroke = pinned ? accentBrush : Brush("#741A1111"),
-                StrokeThickness = 0.45,
-                StrokeLineJoin = PenLineJoin.Round
-            };
-            canvas.Children.Add(path);
-            return new Viewbox { Width = 10, Height = 10, Child = canvas };
+            return MakeButtonIcon(pinned ? IconPinned : IconPin, 10, pinned ? accentBrush : Brush("#741A1111"));
         }
 
         private void TogglePin()
         {
             isPinned = !isPinned;
             Topmost = isPinned;
-            appSettings.AlwaysOnTopByDefault = isPinned;
             var surface = pinButton == null ? null : pinButton.Content as Border;
             if (surface != null)
             {
@@ -2467,7 +2599,6 @@ namespace Kapla
             {
                 pinButton.ToolTip = isPinned ? "Unpin Kapla" : "Keep Kapla on top";
             }
-            SaveSettings();
         }
 
         private Button MakeChapterButton(string assetName, string tooltip)
@@ -2691,6 +2822,35 @@ namespace Kapla
                 surface.Child = BuildPlayIcon(isPlaying);
             }
             playButton.ToolTip = isPlaying ? "Pause" : "Play";
+            UpdateWindowsMediaPlaybackState();
+        }
+
+        private void UpdateWindowsMediaMetadata()
+        {
+            if (windowsMediaControls == null)
+            {
+                return;
+            }
+            var chapter = chapterBox == null ? null : chapterBox.SelectedItem as KoboChapter;
+            windowsMediaControls.UpdateMetadata(currentBook, chapter == null ? null : chapter.Title);
+        }
+
+        private void UpdateWindowsMediaPlaybackState()
+        {
+            if (windowsMediaControls != null)
+            {
+                windowsMediaControls.UpdatePlaybackState(currentBook != null, isPlaying);
+            }
+        }
+
+        private void UpdateWindowsMediaTimeline()
+        {
+            if (windowsMediaControls == null || currentBook == null)
+            {
+                return;
+            }
+            windowsMediaControls.UpdateTimeline(CurrentAbsolutePosition(), currentBook.DurationSeconds);
+            lastWindowsTimelineUpdateUtc = DateTime.UtcNow;
         }
 
         private void HeaderSurfaceOnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -2724,95 +2884,6 @@ namespace Kapla
                 // Native hit testing normally owns the drag. This is only a fallback
                 // for environments that do not deliver WM_NCHITTEST to layered windows.
             }
-        }
-
-        private IntPtr WindowMessageHook(IntPtr window, int message, IntPtr wordParameter, IntPtr longParameter, ref bool handled)
-        {
-            if (message != WindowMessageNonClientHitTest || shellSurface == null || rootLayout == null)
-            {
-                return IntPtr.Zero;
-            }
-
-            var packedPoint = longParameter.ToInt64();
-            var screenX = unchecked((short)(packedPoint & 0xFFFF));
-            var screenY = unchecked((short)((packedPoint >> 16) & 0xFFFF));
-            Point clientPoint;
-            try
-            {
-                clientPoint = PointFromScreen(new Point(screenX, screenY));
-            }
-            catch (InvalidOperationException)
-            {
-                return IntPtr.Zero;
-            }
-
-            const double resizeBorder = 8;
-            var left = clientPoint.X <= resizeBorder;
-            var right = clientPoint.X >= ActualWidth - resizeBorder;
-            var top = clientPoint.Y <= resizeBorder;
-            var bottom = clientPoint.Y >= ActualHeight - resizeBorder;
-            var resizeHit = top && left ? HitTestTopLeft
-                : top && right ? HitTestTopRight
-                : bottom && left ? HitTestBottomLeft
-                : bottom && right ? HitTestBottomRight
-                : left ? HitTestLeft
-                : right ? HitTestRight
-                : top ? HitTestTop
-                : bottom ? HitTestBottom : 0;
-            if (resizeHit != 0)
-            {
-                handled = true;
-                return new IntPtr(resizeHit);
-            }
-
-            if (!IsPointInsideElement(shellSurface, clientPoint) || IsInteractiveElementAt(clientPoint))
-            {
-                return new IntPtr(HitTestClient);
-            }
-
-            handled = true;
-            return new IntPtr(HitTestCaption);
-        }
-
-        private bool IsPointInsideElement(FrameworkElement element, Point pointInRoot)
-        {
-            if (!element.IsVisible || element.ActualWidth <= 0 || element.ActualHeight <= 0)
-            {
-                return false;
-            }
-            try
-            {
-                var topLeft = element.TransformToAncestor(rootLayout).Transform(new Point(0, 0));
-                return new Rect(topLeft, new Size(element.ActualWidth, element.ActualHeight)).Contains(pointInRoot);
-            }
-            catch (InvalidOperationException)
-            {
-                return false;
-            }
-        }
-
-        private bool IsInteractiveElementAt(Point clientPoint)
-        {
-            var current = InputHitTest(clientPoint) as DependencyObject;
-            while (current != null)
-            {
-                if (current is System.Windows.Controls.Primitives.ButtonBase
-                    || current is System.Windows.Controls.Primitives.TextBoxBase
-                    || current is System.Windows.Controls.Primitives.Selector
-                    || current is System.Windows.Controls.Primitives.Thumb
-                    || current is System.Windows.Controls.Primitives.ScrollBar
-                    || current is Slider
-                    || current is ListBoxItem)
-                {
-                    return true;
-                }
-                if (ReferenceEquals(current, rootLayout))
-                {
-                    break;
-                }
-                current = VisualTreeHelper.GetParent(current);
-            }
-            return false;
         }
 
         private void UpdateProgressVisual()
@@ -3212,19 +3283,6 @@ namespace Kapla
             };
         }
 
-        private static Border MakeDot()
-        {
-            return new Border
-            {
-                Width = 11,
-                Height = 11,
-                CornerRadius = new CornerRadius(6),
-                Background = Brush("#DDD8D5"),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-        }
-
         private static Button MakeCircleButton(UIElement content, string tooltip)
         {
             return new Button
@@ -3472,25 +3530,12 @@ namespace Kapla
         {
             try
             {
-                if (appSettings.RememberWindowSize && WindowState == WindowState.Normal)
-                {
-                    appSettings.SavedWindowWidth = Math.Max(MinWidth, ActualWidth);
-                    if (libraryExpanded)
-                    {
-                        appSettings.SavedExpandedHeight = Math.Max(584, ActualHeight);
-                    }
-                    else
-                    {
-                        appSettings.SavedCollapsedHeight = Math.Max(320, Math.Min(420, ActualHeight));
-                    }
-                }
                 if (!appSettings.RememberWindowPosition)
                 {
                     return;
                 }
                 Directory.CreateDirectory(dataDirectory);
-                var collapsedHeight = Math.Max(320, appSettings.SavedCollapsedHeight);
-                var collapsedTop = libraryExpanded ? Top + Math.Max(0, ActualHeight - collapsedHeight) : Top;
+                var collapsedTop = libraryExpanded ? Top + Math.Max(0, ActualHeight - CollapsedWindowHeight) : Top;
                 File.WriteAllLines(windowPositionFile, new[]
                 {
                     Left.ToString("R", CultureInfo.InvariantCulture),
@@ -3934,7 +3979,8 @@ namespace Kapla
             koboClient = new KoboClient(koboSession);
             connectKoboButton.ToolTip = "Add more Kobo audiobooks";
             syncText.Text = "Kobo account connected";
-            syncDetailText.Text = "Your encrypted local session can browse Kobo titles and sync positions for linked imports.";
+            syncDetailText.Text = "Your Kobo library and progress sync are ready.";
+            SetSyncStatus("Ready", null);
         }
 
         private async void ConnectKobo()
@@ -4022,6 +4068,7 @@ namespace Kapla
             statusText.Text = "Syncing your Kobo audiobook library…";
             var books = await koboClient.GetAudiobooksAsync();
             KoboSessionStore.Save(dataDirectory, koboSession);
+            var restored = RestoreCachedKoboBooks(books);
             UpdateLinkedKoboDetails(books);
             remoteKoboBooks.Clear();
             foreach (var book in books)
@@ -4029,9 +4076,65 @@ namespace Kapla
                 remoteKoboBooks.Add(book);
             }
             lastKoboLibraryRefreshUtc = DateTime.UtcNow;
-            statusText.Text = books.Count == 0 ? "Kobo returned no audiobook titles." : "Kobo library synced: " + books.Count + (books.Count == 1 ? " title." : " titles.");
+            statusText.Text = books.Count == 0
+                ? "Kobo returned no audiobook titles."
+                : restored > 0
+                    ? "Kobo library synced and " + restored + (restored == 1 ? " existing download was restored." : " existing downloads were restored.")
+                    : "Kobo library synced: " + books.Count + (books.Count == 1 ? " title." : " titles.");
             SetSyncStatus("Synced", null);
             if (showKoboView) ShowExpandedView("kobo");
+        }
+
+        private int RestoreCachedKoboBooks(IList<KoboRemoteBook> remoteBooks)
+        {
+            var restored = 0;
+            foreach (var remoteBook in remoteBooks)
+            {
+                var alreadyImported = allBooks.Any(book =>
+                    (!String.IsNullOrWhiteSpace(remoteBook.RevisionId) && String.Equals(book.KoboRevisionId, remoteBook.RevisionId, StringComparison.OrdinalIgnoreCase))
+                    || (!String.IsNullOrWhiteSpace(remoteBook.ProductId) && String.Equals(book.KoboProductId, remoteBook.ProductId, StringComparison.OrdinalIgnoreCase)));
+                if (alreadyImported)
+                {
+                    continue;
+                }
+
+                var cached = KoboCachedAudiobook.TryRestore(remoteBook, dataDirectory);
+                if (cached == null)
+                {
+                    continue;
+                }
+
+                var duration = cached.Tracks.Sum(track => Math.Max(0, track.DurationSeconds));
+                allBooks.Add(new BookEntry
+                {
+                    Path = cached.OutputPath,
+                    Title = remoteBook.Title,
+                    Author = KoboMetadata.PreferAuthor(cached.Author, remoteBook.Author),
+                    Narrator = cached.Narrator,
+                    Series = cached.Series,
+                    Publisher = cached.Publisher,
+                    ReleaseDate = cached.ReleaseDate,
+                    Description = cached.Description,
+                    Tracks = cached.Tracks,
+                    Chapters = cached.Chapters,
+                    KoboRevisionId = remoteBook.RevisionId,
+                    KoboEntitlementId = remoteBook.EntitlementId,
+                    KoboProductId = remoteBook.ProductId,
+                    KoboProgressPercent = remoteBook.ProgressPercent,
+                    PositionSeconds = duration * Math.Max(0, Math.Min(100, remoteBook.ProgressPercent)) / 100.0,
+                    DurationSeconds = duration,
+                    CoverPath = cached.CoverPath,
+                    CoverUrl = cached.CoverUrl
+                });
+                restored++;
+            }
+
+            if (restored > 0)
+            {
+                SaveLibrary();
+                RefreshVisibleBooks();
+            }
+            return restored;
         }
 
         private async Task ImportSelectedKoboBookAsync()
@@ -4100,6 +4203,7 @@ namespace Kapla
             koboLibrarySyncPending = false;
             remoteKoboBooks.Clear();
             KoboSessionStore.Clear(dataDirectory);
+            SetSyncStatus("Offline", "Connect Kobo to sync.");
             statusText.Text = "Kobo account data cleared from this PC.";
             ShowExpandedView("kobo");
         }
@@ -4121,6 +4225,7 @@ namespace Kapla
                 existing.Description = result.Description;
                 existing.Tracks = result.Tracks;
                 existing.Chapters = result.Chapters;
+                existing.KoboEntitlementId = remoteBook.EntitlementId;
                 existing.KoboProgressPercent = remoteBook.ProgressPercent;
                 existing.Finished = false;
             }
@@ -4139,6 +4244,7 @@ namespace Kapla
                     Tracks = result.Tracks,
                     Chapters = result.Chapters,
                     KoboRevisionId = remoteBook.RevisionId,
+                    KoboEntitlementId = remoteBook.EntitlementId,
                     KoboProductId = remoteBook.ProductId,
                     KoboProgressPercent = remoteBook.ProgressPercent,
                     CoverPath = result.CoverPath,
@@ -4173,6 +4279,10 @@ namespace Kapla
                 linked.ReleaseDate = remote.ReleaseDate;
                 linked.Description = remote.Description;
                 linked.CoverUrl = remote.CoverUrl;
+                if (!String.IsNullOrWhiteSpace(remote.EntitlementId))
+                {
+                    linked.KoboEntitlementId = remote.EntitlementId;
+                }
                 linked.KoboProgressPercent = remote.ProgressPercent;
                 changed = true;
             }
@@ -4445,7 +4555,8 @@ namespace Kapla
             for (var index = 0; index < chapters.Count; index++)
             {
                 var end = chapters[index].EndSeconds > chapters[index].StartSeconds ? chapters[index].EndSeconds : Double.MaxValue;
-                if (position >= chapters[index].StartSeconds && position < end)
+                var isLastBoundary = index == chapters.Count - 1 && Math.Abs(position - end) < 0.001;
+                if ((position >= chapters[index].StartSeconds && position < end) || isLastBoundary)
                 {
                     selectedIndex = index;
                     break;
@@ -4476,6 +4587,7 @@ namespace Kapla
                 chapterNextButton.IsEnabled = selectedIndex >= 0 && selectedIndex + 1 < chapters.Count;
             }
             updatingChapter = false;
+            UpdateWindowsMediaMetadata();
         }
 
         private void MoveChapter(int direction)
@@ -4552,6 +4664,7 @@ namespace Kapla
                 progressSlider.Value = 0;
                 UpdateProgressVisual();
                 UpdatePlayButtonVisual();
+                UpdateWindowsMediaMetadata();
                 return;
             }
 
@@ -4596,6 +4709,7 @@ namespace Kapla
             UpdateChapterSelection(currentBook.PositionSeconds);
             UpdateProgressDisplay(currentBook.PositionSeconds);
             UpdatePlayButtonVisual();
+            UpdateWindowsMediaMetadata();
         }
 
         private void LoadCover()
@@ -4701,6 +4815,7 @@ namespace Kapla
             isPlaying = false;
             playWhenSourceReady = playWhenReady;
             media.Source = new Uri(ResolvePlayablePath(trackPath), UriKind.Absolute);
+            UpdateWindowsMediaPlaybackState();
         }
 
         private void TogglePlay()
@@ -4719,10 +4834,7 @@ namespace Kapla
 
             if (isPlaying)
             {
-                media.Pause();
-                isPlaying = false;
-                UpdatePlayButtonVisual();
-                SaveCurrentPosition();
+                PauseCurrent();
             }
             else
             {
@@ -4730,6 +4842,20 @@ namespace Kapla
                 isPlaying = true;
                 UpdatePlayButtonVisual();
             }
+        }
+
+        private void PauseCurrent()
+        {
+            if (media == null || !isPlaying)
+            {
+                UpdateWindowsMediaPlaybackState();
+                return;
+            }
+            media.Pause();
+            isPlaying = false;
+            UpdatePlayButtonVisual();
+            SaveCurrentPosition();
+            UpdateWindowsMediaTimeline();
         }
 
         private void PlayCurrent()
@@ -4757,7 +4883,7 @@ namespace Kapla
                 return;
             }
 
-            SeekToGlobal(Math.Max(0, currentBook.PositionSeconds + seconds), isPlaying);
+            SeekToGlobal(Math.Max(0, CurrentAbsolutePosition() + seconds), isPlaying);
         }
 
         private void ApplySpeed()
@@ -4865,6 +4991,7 @@ namespace Kapla
                 UpdateChapterSelection(target);
                 UpdateProgressDisplay(target);
                 SaveCurrentPosition();
+                UpdateWindowsMediaTimeline();
                 return;
             }
 
@@ -4879,6 +5006,7 @@ namespace Kapla
             media.Stop();
             media.Source = null;
             LoadSource(resume);
+            UpdateWindowsMediaTimeline();
         }
 
         private void ProgressTimerOnTick(object sender, EventArgs e)
@@ -4918,6 +5046,10 @@ namespace Kapla
 
             currentBook.PositionSeconds = seconds;
             currentBook.LastPlayedUtc = DateTime.UtcNow;
+            if ((DateTime.UtcNow - lastWindowsTimelineUpdateUtc).TotalSeconds >= 5)
+            {
+                UpdateWindowsMediaTimeline();
+            }
             if (currentBook.DurationSeconds > 0)
             {
                 UpdateChapterSelection(seconds);
@@ -4959,6 +5091,22 @@ namespace Kapla
             QueueKoboSynchronization(false, false);
         }
 
+        private async void SyncButtonOnClick(object sender, RoutedEventArgs e)
+        {
+            if (koboClient == null || koboSession == null || String.IsNullOrWhiteSpace(koboSession.AccessToken))
+            {
+                statusText.Text = "Connect Kobo from the Kobo tab to sync.";
+                EnsureExpanded("kobo");
+                return;
+            }
+            if (koboSyncInProgress)
+            {
+                return;
+            }
+            QueueKoboSynchronization(true, true);
+            await ProcessKoboSyncQueueAsync();
+        }
+
         private void QueueKoboSynchronization(bool includeLibrary, bool immediate)
         {
             if (koboClient == null || koboSession == null || String.IsNullOrWhiteSpace(koboSession.AccessToken))
@@ -4996,7 +5144,7 @@ namespace Kapla
             var refreshLibrary = koboLibrarySyncPending;
             koboSyncPending = false;
             koboLibrarySyncPending = false;
-            var revisionId = currentBook == null ? null : currentBook.KoboRevisionId;
+            var syncBook = currentBook;
             var position = currentBook == null ? 0 : currentBook.PositionSeconds;
             var duration = currentBook == null ? 0 : currentBook.DurationSeconds;
             SetSyncStatus("Syncing", null);
@@ -5006,15 +5154,18 @@ namespace Kapla
                 {
                     await SyncKoboLibraryAsync(false);
                 }
-                if (!String.IsNullOrWhiteSpace(revisionId) && duration > 0)
+                var progressId = syncBook == null
+                    ? null
+                    : KoboSyncPolicy.PreferredProgressId(syncBook.KoboEntitlementId, syncBook.KoboRevisionId);
+                if (!String.IsNullOrWhiteSpace(progressId) && duration > 0)
                 {
-                    await koboClient.UpdateProgressAsync(revisionId, position, duration);
+                    await koboClient.UpdateProgressAsync(progressId, position, duration);
                 }
                 KoboSessionStore.Save(dataDirectory, koboSession);
                 lastKoboSyncUtc = DateTime.UtcNow;
                 koboSyncFailures = 0;
                 nextKoboSyncAttemptUtc = DateTime.MaxValue;
-                SetSyncStatus("Synced", String.IsNullOrWhiteSpace(revisionId) ? null : FormatTime(position));
+                SetSyncStatus("Synced", String.IsNullOrWhiteSpace(progressId) ? null : FormatTime(position));
             }
             catch (Exception ex)
             {
@@ -5023,11 +5174,17 @@ namespace Kapla
                 koboSyncPending = true;
                 koboLibrarySyncPending = refreshLibrary;
                 nextKoboSyncAttemptUtc = DateTime.UtcNow.Add(delay);
-                SetSyncStatus(NetworkInterface.GetIsNetworkAvailable() ? "Sync error" : "Offline", DescribeKoboError(ex));
+                var detail = DescribeKoboError(ex);
+                statusText.Text = "Kobo sync failed: " + detail;
+                SetSyncStatus(NetworkInterface.GetIsNetworkAvailable() ? "Sync error" : "Offline", detail);
             }
             finally
             {
                 koboSyncInProgress = false;
+                var finalStatus = headerSyncText == null || String.IsNullOrWhiteSpace(headerSyncText.Text)
+                    ? "Ready"
+                    : headerSyncText.Text;
+                SetSyncStatus(finalStatus, null);
             }
         }
 
@@ -5035,7 +5192,50 @@ namespace Kapla
         {
             if (headerSyncText != null) headerSyncText.Text = koboClient == null ? String.Empty : status;
             if (syncText != null) syncText.Text = koboClient == null ? "Kobo account" : "Kobo " + status.ToLowerInvariant();
-            if (syncDetailText != null && !String.IsNullOrWhiteSpace(detail)) syncDetailText.Text = detail;
+            if (String.Equals(status, "Synced", StringComparison.OrdinalIgnoreCase))
+            {
+                lastKoboSyncDetail = null;
+                var successDetail = String.IsNullOrWhiteSpace(detail)
+                    ? "Kobo library and progress are synced."
+                    : "Progress synced at " + detail + ".";
+                if (syncDetailText != null) syncDetailText.Text = successDetail;
+                if (koboActivationCodeText != null && pendingKoboActivation == null) koboActivationCodeText.Text = successDetail;
+            }
+            else if (!String.IsNullOrWhiteSpace(detail))
+            {
+                lastKoboSyncDetail = detail;
+                if (syncDetailText != null) syncDetailText.Text = detail;
+                if (koboActivationCodeText != null && pendingKoboActivation == null) koboActivationCodeText.Text = detail;
+            }
+            if (syncButton != null)
+            {
+                var connected = koboClient != null && koboSession != null && !String.IsNullOrWhiteSpace(koboSession.AccessToken);
+                syncButton.IsEnabled = connected && !koboSyncInProgress;
+                syncButton.ToolTip = connected
+                    ? (String.Equals(status, "Offline", StringComparison.OrdinalIgnoreCase) ? "Kobo sync unavailable offline" : "Sync Kobo now")
+                    : "Connect Kobo to sync";
+            }
+            if (syncIconText != null)
+            {
+                var rotation = syncIconText.RenderTransform as RotateTransform;
+                if (rotation != null)
+                {
+                    rotation.BeginAnimation(RotateTransform.AngleProperty, null);
+                    rotation.Angle = 0;
+                    if (String.Equals(status, "Syncing", StringComparison.OrdinalIgnoreCase)
+                        && appSettings.AnimationsEnabled && !appSettings.ReduceMotion)
+                    {
+                        rotation.BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromMilliseconds(900))
+                        {
+                            RepeatBehavior = RepeatBehavior.Forever
+                        });
+                    }
+                }
+                syncIconText.Text = String.Equals(status, "Synced", StringComparison.OrdinalIgnoreCase) ? IconCheck : IconSync;
+                syncIconText.Foreground = status.IndexOf("error", StringComparison.OrdinalIgnoreCase) >= 0
+                    ? Brush("#C36B6B")
+                    : IsDarkTheme ? Brush("#AAB3BD") : Brush("#6F625E");
+            }
         }
 
         private void NetworkAvailabilityChanged(object sender, NetworkAvailabilityEventArgs e)
@@ -5085,6 +5285,7 @@ namespace Kapla
                 UpdatePlayButtonVisual();
             }
             playWhenSourceReady = false;
+            UpdateWindowsMediaTimeline();
         }
 
         private void MediaOnMediaEnded(object sender, RoutedEventArgs e)
@@ -5130,6 +5331,7 @@ namespace Kapla
             isPlaying = false;
             playWhenSourceReady = false;
             UpdatePlayButtonVisual();
+            UpdateWindowsMediaTimeline();
             statusText.Text = "Kapla could not open this audiobook track with the installed Windows audio codecs.";
         }
 

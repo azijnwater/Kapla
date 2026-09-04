@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.Serialization;
 
 namespace Kapla
 {
@@ -18,6 +19,9 @@ namespace Kapla
     [Serializable]
     public sealed class BookEntry
     {
+        [OptionalField]
+        private string koboEntitlementId;
+
         public string Path { get; set; }
         public string Title { get; set; }
         public string Author { get; set; }
@@ -25,6 +29,11 @@ namespace Kapla
         public string CoverPath { get; set; }
         public string CoverUrl { get; set; }
         public string KoboRevisionId { get; set; }
+        public string KoboEntitlementId
+        {
+            get { return koboEntitlementId; }
+            set { koboEntitlementId = value; }
+        }
         public string KoboProductId { get; set; }
         public double KoboProgressPercent { get; set; }
         public double PositionSeconds { get; set; }
@@ -70,7 +79,14 @@ namespace Kapla
         {
             get
             {
-                return !String.IsNullOrWhiteSpace(CoverPath) && File.Exists(CoverPath) ? CoverPath : CoverUrl;
+                if (!String.IsNullOrWhiteSpace(CoverPath) && File.Exists(CoverPath))
+                {
+                    return CoverPath;
+                }
+                var uri = KoboEndpointPolicy.CreateUri(CoverUrl);
+                return String.IsNullOrWhiteSpace(KoboEndpointPolicy.Validate(uri, KoboEndpointKind.Resource))
+                    ? uri.AbsoluteUri
+                    : null;
             }
         }
 
@@ -91,9 +107,7 @@ namespace Kapla
     {
         public bool LaunchAtStartup { get; set; }
         public bool RememberWindowPosition { get; set; }
-        public bool AlwaysOnTopByDefault { get; set; }
         public bool ResumeLastAudiobook { get; set; }
-        public bool MinimizeOnClose { get; set; }
         public double DefaultPlaybackSpeed { get; set; }
         public int RewindSeconds { get; set; }
         public int ForwardSeconds { get; set; }
@@ -105,13 +119,8 @@ namespace Kapla
         public string LibrarySort { get; set; }
         public string PreferredMetadataSource { get; set; }
         public string AppearanceMode { get; set; }
-        public string AccentColor { get; set; }
         public bool AnimationsEnabled { get; set; }
         public bool ReduceMotion { get; set; }
-        public bool RememberWindowSize { get; set; }
-        public double SavedWindowWidth { get; set; }
-        public double SavedCollapsedHeight { get; set; }
-        public double SavedExpandedHeight { get; set; }
         public bool ShowCoverArtwork { get; set; }
         public string ProgressDisplayMode { get; set; }
         public string LastBookPath { get; set; }
@@ -131,12 +140,7 @@ namespace Kapla
             LibrarySort = "Recently played";
             PreferredMetadataSource = "Embedded metadata first";
             AppearanceMode = "Light";
-            AccentColor = "#7DD3FC";
             AnimationsEnabled = true;
-            RememberWindowSize = true;
-            SavedWindowWidth = 608;
-            SavedCollapsedHeight = 352;
-            SavedExpandedHeight = 584;
             ShowCoverArtwork = true;
             ProgressDisplayMode = PlaybackProgress.ChapterMode;
         }
@@ -157,6 +161,7 @@ namespace Kapla
     public sealed class KoboRemoteBook
     {
         public string RevisionId { get; set; }
+        public string EntitlementId { get; set; }
         public string ProductId { get; set; }
         public string Title { get; set; }
         public string Author { get; set; }

@@ -11,6 +11,7 @@ outputs/
 release/
 TestResults/
 Tests/*.exe
+/Kapla.exe
 
 # Kapla's per-user data (never commit account or listening state)
 library.json

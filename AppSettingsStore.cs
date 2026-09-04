@@ -46,23 +46,17 @@ namespace Kapla
                     {
                         value.Volume = 0.9;
                     }
-                    if (String.IsNullOrWhiteSpace(value.AccentColor))
-                    {
-                        value.AccentColor = "#7DD3FC";
-                    }
-                    if (value.SavedWindowWidth < 420 || value.SavedWindowWidth > 2400)
-                    {
-                        value.SavedWindowWidth = 608;
-                    }
-                    if (value.SavedCollapsedHeight < 320 || value.SavedCollapsedHeight > 420)
-                    {
-                        value.SavedCollapsedHeight = 352;
-                    }
-                    if (value.SavedExpandedHeight < 584 || value.SavedExpandedHeight > 1800)
-                    {
-                        value.SavedExpandedHeight = 584;
-                    }
                     if (String.IsNullOrWhiteSpace(value.ProgressDisplayMode))
+                    {
+                        value.ProgressDisplayMode = PlaybackProgress.ChapterMode;
+                    }
+                    if (!String.Equals(value.AppearanceMode, "Dark", StringComparison.OrdinalIgnoreCase)
+                        && !String.Equals(value.AppearanceMode, "Light", StringComparison.OrdinalIgnoreCase))
+                    {
+                        value.AppearanceMode = "Light";
+                    }
+                    if (!String.Equals(value.ProgressDisplayMode, PlaybackProgress.ChapterMode, StringComparison.OrdinalIgnoreCase)
+                        && !String.Equals(value.ProgressDisplayMode, PlaybackProgress.BookMode, StringComparison.OrdinalIgnoreCase))
                     {
                         value.ProgressDisplayMode = PlaybackProgress.ChapterMode;
                     }
