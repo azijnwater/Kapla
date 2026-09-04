@@ -668,9 +668,18 @@ namespace Kapla
                     applyingResumePosition = false;
                     sourceLoaded = true;
                     sourceLoadPending = false;
-                    if (shouldPlay || playWhenSourceReady)
+                    var startPlayback = shouldPlay || playWhenSourceReady;
+                    // WPF's MediaElement only honors a seek reliably after it
+                    // has entered the playing state. Start it, apply the seek,
+                    // then pause when the user asked to resume later.
+                    media.Play();
+                    media.Position = TimeSpan.FromSeconds(start);
+                    if (!startPlayback)
                     {
-                        media.Play();
+                        media.Pause();
+                    }
+                    else
+                    {
                         isPlaying = true;
                         UpdatePlayButtonVisual();
                     }
