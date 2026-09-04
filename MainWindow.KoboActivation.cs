@@ -20,7 +20,7 @@ namespace Kapla
                 Title = "Connect Kobo",
                 Owner = this,
                 Width = 430,
-                Height = 390,
+                Height = 460,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 WindowStyle = WindowStyle.None,
                 ResizeMode = ResizeMode.NoResize,
