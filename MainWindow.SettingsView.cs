@@ -184,6 +184,7 @@ namespace Kapla
             try
             {
                 purgingData = true;
+                ReleaseArtworkForPurge();
                 if (media != null)
                 {
                     media.Stop();
@@ -222,6 +223,26 @@ namespace Kapla
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
             }
+        }
+
+        private void ReleaseArtworkForPurge()
+        {
+            // WPF's default string-to-image converter can retain a file handle until
+            // its Image element is detached. Detach all library/player visuals first,
+            // then collect the decoder objects before removing the data directory.
+            if (libraryList != null) libraryList.ItemsSource = null;
+            if (remoteKoboList != null)
+            {
+                remoteKoboList.SelectedItems.Clear();
+                remoteKoboList.ItemsSource = null;
+            }
+            if (expandedContentHost != null) expandedContentHost.Content = null;
+            if (coverBorder != null) coverBorder.Child = null;
+            if (librarySurface != null) librarySurface.Child = null;
+            UpdateLayout();
+            System.GC.Collect();
+            System.GC.WaitForPendingFinalizers();
+            System.GC.Collect();
         }
 
         private UIElement BuildPlaybackSettingsContent()

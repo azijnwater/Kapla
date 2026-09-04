@@ -25,6 +25,34 @@ using Microsoft.Win32;
 
 namespace Kapla
 {
+    internal sealed class LocalCoverImageConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            var path = value as string;
+            if (String.IsNullOrWhiteSpace(path) || !File.Exists(path)) return null;
+            try
+            {
+                var bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.UriSource = new Uri(path, UriKind.Absolute);
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.EndInit();
+                bitmap.Freeze();
+                return bitmap;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            throw new NotSupportedException();
+        }
+    }
+
     public sealed partial class MainWindow : Window
     {
         private void BuildLayout()
@@ -883,7 +911,10 @@ namespace Kapla
             placeholder.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
             coverLayers.AppendChild(placeholder);
             var image = new FrameworkElementFactory(typeof(Image));
-            image.SetBinding(Image.SourceProperty, new Binding("CoverSource"));
+            image.SetBinding(Image.SourceProperty, new Binding("CoverSource")
+            {
+                Converter = new LocalCoverImageConverter()
+            });
             image.SetValue(Image.StretchProperty, Stretch.UniformToFill);
             image.SetValue(Image.WidthProperty, 90.0);
             image.SetValue(Image.HeightProperty, 120.0);
