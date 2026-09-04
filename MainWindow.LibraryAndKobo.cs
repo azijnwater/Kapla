@@ -350,7 +350,7 @@ namespace Kapla
         private double CurrentAbsolutePosition()
         {
             return currentBook == null ? 0 : sourceLoaded && !applyingResumePosition
-                ? currentTrackStartSeconds + media.Position.TotalSeconds
+                ? GetTrackStartSeconds(currentTrackIndex) + media.Position.TotalSeconds
                 : currentBook.PositionSeconds;
         }
 

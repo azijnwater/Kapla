@@ -299,6 +299,11 @@ namespace Kapla
             currentBook.Finished = false;
             UpdateChapterSelection(target);
             UpdateProgressDisplay(target);
+            // Persist the requested global position before replacing the media
+            // source. Loading a different chapter is asynchronous, so waiting
+            // for MediaOpened can otherwise lose a seek if the window closes
+            // while the new track is still opening.
+            SaveLibrary();
             sourceLoaded = false;
             media.Stop();
             media.Source = null;
@@ -335,7 +340,12 @@ namespace Kapla
                 currentTrackStartSeconds = GetTrackStartSeconds(currentTrackIndex);
             }
 
-            var seconds = currentTrackStartSeconds + media.Position.TotalSeconds;
+            // Always derive the chapter offset from the current track list. The
+            // cached value can be stale while a media source is being replaced;
+            // persisting it in that window turns a global position into a
+            // chapter-relative position (for example, chapter 10 becomes 0:01).
+            currentTrackStartSeconds = GetTrackStartSeconds(currentTrackIndex);
+            var seconds = PlaybackTimeline.AbsolutePosition(playbackTracks, currentTrackIndex, media.Position.TotalSeconds);
             if (seconds <= 0)
             {
                 return;
@@ -374,9 +384,17 @@ namespace Kapla
             }
 
             var mediaSeconds = media.Position.TotalSeconds;
-            if (mediaSeconds > 0.25 || currentBook.PositionSeconds <= currentTrackStartSeconds + 0.25)
+            var trackStart = GetTrackStartSeconds(currentTrackIndex);
+            if (!Double.IsNaN(mediaSeconds) && !Double.IsInfinity(mediaSeconds) && mediaSeconds >= 0)
             {
-                currentBook.PositionSeconds = currentTrackStartSeconds + mediaSeconds;
+                currentTrackStartSeconds = trackStart;
+                // A paused MediaElement may report zero for a frame while the
+                // book already contains the last position. Keep that position
+                // rather than replacing it with the beginning of the track.
+                if (mediaSeconds > 0.25 || currentBook.PositionSeconds <= trackStart + 0.25)
+                {
+                    currentBook.PositionSeconds = PlaybackTimeline.AbsolutePosition(playbackTracks, currentTrackIndex, mediaSeconds);
+                }
             }
             currentBook.HasLocalPlaybackPosition = true;
             currentBook.LastPlayedUtc = DateTime.UtcNow;
@@ -593,7 +611,9 @@ namespace Kapla
 
         private void MediaOnMediaOpened(object sender, RoutedEventArgs e)
         {
-            if (currentBook == null)
+            var openedBook = currentBook;
+            var openedTrack = currentTrackIndex;
+            if (openedBook == null)
             {
                 return;
             }
@@ -602,21 +622,6 @@ namespace Kapla
             isPlaying = false;
             ApplySpeed();
             media.Volume = volumeSlider.Value;
-            if (currentTrackIndex >= 0 && currentTrackIndex < playbackTracks.Count && media.NaturalDuration.HasTimeSpan)
-            {
-                playbackTracks[currentTrackIndex].DurationSeconds = media.NaturalDuration.TimeSpan.TotalSeconds;
-                UpdateTotalDuration();
-                currentTrackStartSeconds = GetTrackStartSeconds(currentTrackIndex);
-            }
-
-            var start = Math.Min(
-                media.NaturalDuration.HasTimeSpan ? media.NaturalDuration.TimeSpan.TotalSeconds : Double.MaxValue,
-                Math.Max(0, pendingTrackPositionSeconds));
-            currentBook.PositionSeconds = currentTrackStartSeconds + start;
-            currentBook.Finished = false;
-            UpdateBookDetails();
-            var openedBook = currentBook;
-            var openedTrack = currentTrackIndex;
             var shouldPlay = playWhenSourceReady;
             Dispatcher.BeginInvoke(new Action(delegate
             {
@@ -625,6 +630,18 @@ namespace Kapla
                     applyingResumePosition = false;
                     return;
                 }
+                if (openedTrack >= 0 && openedTrack < playbackTracks.Count && media.NaturalDuration.HasTimeSpan)
+                {
+                    playbackTracks[openedTrack].DurationSeconds = media.NaturalDuration.TimeSpan.TotalSeconds;
+                    UpdateTotalDuration();
+                }
+                currentTrackStartSeconds = GetTrackStartSeconds(openedTrack);
+                var start = Math.Min(
+                    media.NaturalDuration.HasTimeSpan ? media.NaturalDuration.TimeSpan.TotalSeconds : Double.MaxValue,
+                    Math.Max(0, pendingTrackPositionSeconds));
+                currentBook.PositionSeconds = currentTrackStartSeconds + start;
+                currentBook.Finished = false;
+                UpdateBookDetails();
                 media.Position = TimeSpan.FromSeconds(start);
                 Dispatcher.BeginInvoke(new Action(delegate
                 {
@@ -635,6 +652,7 @@ namespace Kapla
                     }
                     media.Position = TimeSpan.FromSeconds(start);
                     pendingTrackPositionSeconds = 0;
+                    currentTrackStartSeconds = GetTrackStartSeconds(openedTrack);
                     currentBook.PositionSeconds = currentTrackStartSeconds + start;
                     applyingResumePosition = false;
                     sourceLoaded = true;

@@ -30,6 +30,15 @@ namespace Kapla
             return total;
         }
 
+        public static double AbsolutePosition(IList<KoboTrack> tracks, int trackIndex, double localSeconds)
+        {
+            if (Double.IsNaN(localSeconds) || Double.IsInfinity(localSeconds))
+            {
+                localSeconds = 0;
+            }
+            return TrackStart(tracks, trackIndex) + Math.Max(0, localSeconds);
+        }
+
         public static int FindTrack(IList<KoboTrack> tracks, double position)
         {
             if (tracks == null || tracks.Count == 0)

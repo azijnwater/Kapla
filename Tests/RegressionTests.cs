@@ -86,6 +86,8 @@ namespace Kapla.Tests
             };
             CheckEqual("timeline total", 60.0, PlaybackTimeline.TotalDuration(tracks));
             CheckEqual("track start", 30.0, PlaybackTimeline.TrackStart(tracks, 2));
+            CheckEqual("absolute position includes prior chapters", 42.5, PlaybackTimeline.AbsolutePosition(tracks, 2, 12.5));
+            CheckEqual("negative local position is clamped", 30.0, PlaybackTimeline.AbsolutePosition(tracks, 2, -4));
             CheckEqual("exact chapter boundary maps forward", 1, PlaybackTimeline.FindTrack(tracks, 10));
             CheckEqual("second boundary maps forward", 2, PlaybackTimeline.FindTrack(tracks, 30));
             CheckEqual("end maps to final track", 2, PlaybackTimeline.FindTrack(tracks, 60));
