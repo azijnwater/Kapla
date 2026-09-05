@@ -655,6 +655,7 @@ namespace Kapla
             }
             playButton.ToolTip = isPlaying ? "Pause" : "Play";
             UpdateWindowsMediaPlaybackState();
+            UpdateMiniPlayer();
         }
 
         private void UpdateWindowsMediaMetadata()
