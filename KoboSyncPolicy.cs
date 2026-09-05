@@ -42,6 +42,12 @@ namespace Kapla
             return Math.Max(0, Math.Min(100, positionSeconds / durationSeconds * 100));
         }
 
+        public static int KoboProgressPercent(double positionSeconds, double durationSeconds)
+        {
+            var percent = ProgressPercent(positionSeconds, durationSeconds);
+            return (int)Math.Max(0, Math.Min(100, Math.Round(percent, MidpointRounding.AwayFromZero)));
+        }
+
         public static string PreferredProgressId(string entitlementId, string revisionId)
         {
             return !String.IsNullOrWhiteSpace(entitlementId) ? entitlementId : revisionId;

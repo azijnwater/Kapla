@@ -35,6 +35,16 @@ namespace Kapla
         public KoboProtectedException(string message) : base(message) { }
     }
 
+    internal sealed class KoboHttpException : InvalidOperationException
+    {
+        public HttpStatusCode StatusCode { get; private set; }
+
+        public KoboHttpException(string message, HttpStatusCode statusCode) : base(message)
+        {
+            StatusCode = statusCode;
+        }
+    }
+
     internal static class KoboSessionStore
     {
         private const string FileName = "kobo-session.bin";
@@ -484,10 +494,10 @@ namespace Kapla
             }
 
             await LoadResourcesAsync().ConfigureAwait(false);
-            // Kobo's reading-state endpoint accepts a fractional percentage. Keeping
-            // the fraction preserves the listening position much more closely than
-            // rounding to a whole percent (especially for long audiobooks).
-            var percent = KoboSyncPolicy.ProgressPercent(positionSeconds, durationSeconds);
+            // Kobo's reading-state endpoint expects the device-style whole-number
+            // percentage fields. Kapla keeps the exact local position separately;
+            // the server receives the closest representable Kobo percentage.
+            var percent = KoboSyncPolicy.KoboProgressPercent(positionSeconds, durationSeconds);
             var stateUrl = GetResource("reading_state").Replace("{Ids}", Uri.EscapeDataString(entitlementId));
             var currentState = FirstDictionary(await GetApiJsonAsync(stateUrl).ConfigureAwait(false)) ?? new Dictionary<string, object>();
             var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture);
@@ -1180,7 +1190,7 @@ namespace Kapla
             {
                 message += " This title may be protected or unavailable to third-party playback.";
             }
-            throw new InvalidOperationException(message);
+            throw new KoboHttpException(message, response.StatusCode);
         }
 
         private static IEnumerable<Dictionary<string, object>> EnumerateEntitlements(object root)

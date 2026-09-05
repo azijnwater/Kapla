@@ -524,6 +524,26 @@ namespace Kapla
                     {
                         await koboClient.UpdateProgressAsync(progressId, position, duration);
                     }
+                    catch (KoboHttpException ex)
+                    {
+                        var statusCode = (int)ex.StatusCode;
+                        if (statusCode >= 400 && statusCode < 500 && statusCode != 429)
+                        {
+                            // A permanent client-side rejection (most commonly a
+                            // malformed reading-state payload) must not be retried
+                            // forever and make a rate-limit situation worse.
+                            koboSyncFailures = 0;
+                            koboSyncPending = false;
+                            koboLibrarySyncPending = false;
+                            nextKoboSyncAttemptUtc = DateTime.MaxValue;
+                            var permanentDetail = DescribeKoboError(ex) + " It will not be retried until you resume playback or choose Sync Kobo now.";
+                            statusText.Text = (refreshLibrary ? "Kobo library synced, but " : String.Empty)
+                                + "progress sync was rejected: " + permanentDetail;
+                            SetSyncStatus("Sync issue", permanentDetail);
+                            return;
+                        }
+                        throw;
+                    }
                     catch (Exception ex)
                     {
                         koboSyncFailures = Math.Min(6, koboSyncFailures + 1);
