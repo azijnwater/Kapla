@@ -272,77 +272,12 @@ namespace Kapla
 
         private void ApplyThemeToElement(DependencyObject element)
         {
-            if (element == null)
-            {
-                return;
-            }
-            var border = element as Border;
-            if (border != null)
-            {
-                border.Background = ThemeBrush(border.Background);
-                border.BorderBrush = ThemeBrush(border.BorderBrush);
-            }
-            var panel = element as Panel;
-            if (panel != null) panel.Background = ThemeBrush(panel.Background);
-            var text = element as TextBlock;
-            if (text != null) text.Foreground = ThemeBrush(text.Foreground);
-            var control = element as Control;
-            if (control != null)
-            {
-                control.Background = ThemeBrush(control.Background);
-                control.Foreground = ThemeBrush(control.Foreground);
-                control.BorderBrush = ThemeBrush(control.BorderBrush);
-            }
-            var shape = element as System.Windows.Shapes.Shape;
-            if (shape != null)
-            {
-                shape.Fill = ThemeBrush(shape.Fill);
-                shape.Stroke = ThemeBrush(shape.Stroke);
-            }
-            var count = VisualTreeHelper.GetChildrenCount(element);
-            for (var index = 0; index < count; index++)
-            {
-                ApplyThemeToElement(VisualTreeHelper.GetChild(element, index));
-            }
+            ThemePalette.Apply(element, IsDarkTheme);
         }
 
         private Brush ThemeBrush(Brush value)
         {
-            var solid = value as SolidColorBrush;
-            if (solid == null)
-            {
-                return value;
-            }
-            var color = solid.Color;
-            var rgb = String.Format(CultureInfo.InvariantCulture, "{0:X2}{1:X2}{2:X2}", color.R, color.G, color.B);
-            string replacement = null;
-            if (IsDarkTheme)
-            {
-                if (rgb == "FDF8F4") replacement = "#171A1F";
-                else if (rgb == "FFFFFF") replacement = "#232830";
-                else if (rgb == "EFE8E8" || rgb == "F7F0EA" || rgb == "E7E0DC" || rgb == "DDF3FC") replacement = "#2A3038";
-                else if (rgb == "1A1111" || rgb == "261D1B") replacement = "#F4F0EC";
-                else if (rgb == "8A7E7A" || rgb == "AB9F9A" || rgb == "6F625E" || rgb == "9E9490" || rgb == "9B908C") replacement = "#AAB3BD";
-                else if (rgb == "4D9FC4" || rgb == "285D78" || rgb == "5FAED2") replacement = "#55B8F6";
-                else if (rgb == "E8DDD7" || rgb == "DED4CF" || rgb == "D7DFDA" || rgb == "A7DDF7") replacement = "#38414C";
-            }
-            else
-            {
-                if (rgb == "171A1F") replacement = "#FDF8F4";
-                else if (rgb == "232830") replacement = "#FFFFFF";
-                else if (rgb == "2A3038") replacement = "#EFE8E8";
-                else if (rgb == "F4F0EC" || rgb == "DCE3EA") replacement = "#1A1111";
-                else if (rgb == "AAB3BD") replacement = "#8A7E7A";
-                else if (rgb == "55B8F6" || rgb == "8DD3FF") replacement = "#7DD3FC";
-                else if (rgb == "38414C" || rgb == "405063") replacement = "#E8DDD7";
-            }
-            if (replacement == null)
-            {
-                return value;
-            }
-            var mapped = (Color)ColorConverter.ConvertFromString(replacement);
-            mapped.A = color.A;
-            return new SolidColorBrush(mapped);
+            return ThemePalette.Map(value, IsDarkTheme);
         }
 
         private Brush BuildPlayButtonBrush()
@@ -394,6 +329,27 @@ namespace Kapla
             };
             AttachMicroInteraction(button, 1.025);
             return button;
+        }
+
+        private void ShowChoiceMenu(Button anchor, IEnumerable<string> values, string selected, Action<string> changed)
+        {
+            var menu = new ContextMenu
+            {
+                PlacementTarget = anchor,
+                Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+                FontFamily = interFont,
+                FontSize = 11,
+                Background = IsDarkTheme ? Brush("#232830") : Brush("#FDF8F4"),
+                Foreground = IsDarkTheme ? Brush("#F4F0EC") : Brush("#261D1B")
+            };
+            foreach (var value in values)
+            {
+                var choice = value;
+                var item = new MenuItem { Header = choice, IsCheckable = true, IsChecked = choice == selected };
+                item.Click += delegate { changed(choice); };
+                menu.Items.Add(item);
+            }
+            menu.IsOpen = true;
         }
 
         private UIElement MakeIconLabel(string glyph, string label, bool primary)

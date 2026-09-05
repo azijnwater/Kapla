@@ -9,9 +9,14 @@ $references = @(
     (Join-Path $framework "System.Core.dll"),
     (Join-Path $framework "System.Runtime.Serialization.dll"),
     (Join-Path $framework "System.Web.Extensions.dll")
+    (Join-Path $framework "WPF\WindowsBase.dll")
+    (Join-Path $framework "WPF\PresentationCore.dll")
+    (Join-Path $framework "WPF\PresentationFramework.dll")
+    (Join-Path $framework "System.Xaml.dll")
 )
 $sources = @(
     (Join-Path $projectRoot "Models.cs"),
+    (Join-Path $projectRoot "ThemePalette.cs"),
     (Join-Path $projectRoot "KoboMetadata.cs"),
     (Join-Path $projectRoot "KoboCachedAudiobook.cs"),
     (Join-Path $projectRoot "PlaybackTimeline.cs"),

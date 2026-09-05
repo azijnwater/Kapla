@@ -12,16 +12,19 @@ if ($version -notmatch '^\d+\.\d+\.\d+$') {
 }
 
 & (Join-Path $projectRoot "Tests\run-tests.ps1")
-& (Join-Path $projectRoot "build.ps1")
+$buildDirectory = Join-Path $projectRoot "outputs\package"
+& (Join-Path $projectRoot "build.ps1") -OutputPath "outputs\package"
 
 New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
 if (Test-Path $stageDirectory) { Remove-Item -LiteralPath $stageDirectory -Recurse -Force }
 New-Item -ItemType Directory -Path $stageDirectory | Out-Null
-Copy-Item (Join-Path $projectRoot "outputs\Kapla.exe") $stageDirectory
-Copy-Item (Join-Path $projectRoot "outputs\Launch-Kapla.cmd") $stageDirectory
-Copy-Item (Join-Path $projectRoot "outputs\README.md") $stageDirectory
-Copy-Item (Join-Path $projectRoot "outputs\Assets") $stageDirectory -Recurse
-Copy-Item (Join-Path $projectRoot "outputs\docs") $stageDirectory -Recurse
+Copy-Item (Join-Path $buildDirectory "Kapla.exe") $stageDirectory
+Copy-Item (Join-Path $buildDirectory "Launch-Kapla.cmd") $stageDirectory
+Copy-Item (Join-Path $buildDirectory "README.md") $stageDirectory
+Copy-Item (Join-Path $projectRoot "LICENSE") $stageDirectory
+Copy-Item (Join-Path $projectRoot "NOTICE.md") $stageDirectory
+Copy-Item (Join-Path $buildDirectory "Assets") $stageDirectory -Recurse
+Copy-Item (Join-Path $buildDirectory "docs") $stageDirectory -Recurse
 if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 Compress-Archive -Path (Join-Path $stageDirectory "*") -DestinationPath $zipPath -CompressionLevel Optimal
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()

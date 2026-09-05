@@ -1,7 +1,13 @@
+param([string]$OutputPath = "outputs")
+
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$outputDirectory = Join-Path $projectRoot "outputs"
+$outputDirectory = [IO.Path]::GetFullPath((Join-Path $projectRoot $OutputPath))
+$allowedOutputRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot "outputs"))
+if ($outputDirectory -ne $allowedOutputRoot -and -not $outputDirectory.StartsWith($allowedOutputRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Build output must stay inside the project's outputs directory."
+}
 $compiler = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $frameworkDirectory = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319"
 $wpfDirectory = Join-Path $frameworkDirectory "WPF"

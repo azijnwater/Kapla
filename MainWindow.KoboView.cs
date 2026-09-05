@@ -100,12 +100,12 @@ namespace Kapla
             accountRow.Children.Add(accountSummary);
 
             var connect = MakeKoboDashboardButton(koboClient == null ? "Connect Kobo" : "Sync library", true, "arrow-repeat.svg");
-            connect.VerticalAlignment = VerticalAlignment.Top;
+            connect.VerticalAlignment = VerticalAlignment.Center;
             connect.Click += delegate { ConnectKobo(); };
             Grid.SetColumn(connect, 2);
             accountRow.Children.Add(connect);
             var disconnect = MakeKoboDashboardButton("Disconnect", false, "x-lg.svg");
-            disconnect.VerticalAlignment = VerticalAlignment.Top;
+            disconnect.VerticalAlignment = VerticalAlignment.Center;
             disconnect.Margin = new Thickness(6, 0, 0, 0);
             disconnect.IsEnabled = koboSession != null;
             disconnect.Visibility = koboSession == null ? Visibility.Collapsed : Visibility.Visible;
@@ -267,7 +267,9 @@ namespace Kapla
                 VerticalAlignment = VerticalAlignment.Center,
                 IsHitTestVisible = false
             };
-            Grid.SetRow(koboActivationCodeText, 1);
+            koboActivationCodeText.TextWrapping = TextWrapping.Wrap;
+            koboActivationCodeText.Margin = new Thickness(8, 3, 8, 3);
+            Grid.SetRow(koboActivationCodeText, 3);
             libraryGrid.Children.Add(koboActivationCodeText);
 
             completeActivationButton = MakeCompactActionButton("I've connected", true, IconCheck);
@@ -277,7 +279,8 @@ namespace Kapla
             completeActivationButton.Margin = new Thickness(0, 0, 7, 0);
             completeActivationButton.Visibility = pendingKoboActivation == null ? Visibility.Collapsed : Visibility.Visible;
             completeActivationButton.Click += async delegate { await CompleteKoboActivationAsync(); };
-            Grid.SetRow(completeActivationButton, 1);
+            libraryGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(completeActivationButton, 4);
             libraryGrid.Children.Add(completeActivationButton);
 
             koboDownloadProgress = new ProgressBar
@@ -291,7 +294,8 @@ namespace Kapla
                 VerticalAlignment = VerticalAlignment.Bottom,
                 Margin = new Thickness(8, 0, 8, 2)
             };
-            Grid.SetRow(koboDownloadProgress, 3);
+            libraryGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(koboDownloadProgress, 5);
             libraryGrid.Children.Add(koboDownloadProgress);
             UpdateKoboSelectionControls();
 

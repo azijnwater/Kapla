@@ -423,6 +423,50 @@ namespace Kapla.Tests
             CheckEqual<KoboDownloadResult>("cache for a different Kobo revision is rejected", null, KoboCachedAudiobook.TryRestore(book, root));
         }
 
+        private static void ThemeTests()
+        {
+            var button = new System.Windows.Controls.Button();
+            var borderFactory = new System.Windows.FrameworkElementFactory(typeof(System.Windows.Controls.Border));
+            borderFactory.SetValue(System.Windows.Controls.Border.BackgroundProperty,
+                new System.Windows.TemplateBindingExtension(System.Windows.Controls.Control.BackgroundProperty));
+            button.Template = new System.Windows.Controls.ControlTemplate(typeof(System.Windows.Controls.Button)) { VisualTree = borderFactory };
+            button.Background = System.Windows.Media.Brushes.White;
+            button.ApplyTemplate();
+            ThemePalette.Apply(button, true);
+            button.Background = System.Windows.Media.Brushes.CornflowerBlue;
+            var border = (System.Windows.Controls.Border)System.Windows.Media.VisualTreeHelper.GetChild(button, 0);
+            Check("theme keeps tab background connected to its control", Object.ReferenceEquals(button.Background, border.Background));
+            var parent = new System.Windows.Controls.StackPanel();
+            var label = new System.Windows.Controls.TextBlock { Text = "Library" };
+            parent.Children.Add(label);
+            System.Windows.Controls.TextBlock.SetForeground(parent, System.Windows.Media.Brushes.White);
+            ThemePalette.Apply(parent, true);
+            System.Windows.Controls.TextBlock.SetForeground(parent, System.Windows.Media.Brushes.CornflowerBlue);
+            Check("theme keeps label foreground inherited", Object.ReferenceEquals(label.Foreground, System.Windows.Media.Brushes.CornflowerBlue));
+
+            // These distinct colors previously collapsed to one color after a theme round trip.
+            foreach (var hex in new[] { "#F7F0EA", "#E7E0DC", "#DDF3FC", "#261D1B", "#AB9F9A", "#6F625E", "#285D78", "#A7DDF7", "#541A1111" })
+            {
+                var original = new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(hex));
+                System.Windows.Media.Brush current = original;
+                for (var pass = 0; pass < 3; pass++)
+                {
+                    current = ThemePalette.Map(current, true);
+                    CheckEqual("theme preserves alpha " + hex, original.Color.A,
+                        ((System.Windows.Media.SolidColorBrush)current).Color.A);
+                    Check("reapplying dark theme is stable " + hex, Object.ReferenceEquals(current, ThemePalette.Map(current, true)));
+                    current = ThemePalette.Map(current, false);
+                    CheckEqual("theme restores original color " + hex, original.Color,
+                        ((System.Windows.Media.SolidColorBrush)current).Color);
+                }
+            }
+            var gradient = new System.Windows.Media.LinearGradientBrush();
+            Check("theme preserves gradients", Object.ReferenceEquals(gradient, ThemePalette.Map(gradient, true)));
+            Check("theme accepts an unset brush", ThemePalette.Map(null, true) == null);
+        }
+
+        [STAThread]
         public static int Main(string[] args)
         {
             var root = Path.Combine(Path.GetTempPath(), "KaplaRegressionTests-" + Guid.NewGuid().ToString("N"));
@@ -430,6 +474,7 @@ namespace Kapla.Tests
             try
             {
                 TimelineTests();
+                ThemeTests();
                 SleepTimerTests();
                 KoboSyncPolicyTests();
                 KoboEndpointSecurityTests();

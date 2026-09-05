@@ -351,7 +351,9 @@ namespace Kapla
             updatingWindowLayout = true;
             try
             {
-                var surfaceWidth = appSettings.ShowCoverArtwork ? ArtworkWindowWidth : CompactWindowWidth;
+                var surfaceWidth = appSettings.ShowCoverArtwork || libraryExpanded ? ArtworkWindowWidth : CompactWindowWidth;
+                MinWidth = Math.Min(Width, surfaceWidth);
+                MaxWidth = Math.Max(Width, surfaceWidth);
                 if (WindowState == WindowState.Normal && Math.Abs(Width - surfaceWidth) > 0.1)
                 {
                     var right = !Double.IsNaN(Left) && ActualWidth > 0 ? Left + ActualWidth : Double.NaN;
@@ -431,147 +433,6 @@ namespace Kapla
             {
                 EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
             });
-        }
-
-        private UIElement BuildLibraryPanel()
-        {
-            librarySurface = new Border
-            {
-                Background = Brush("#FDF8F4"),
-                Padding = new Thickness(18),
-                BorderThickness = new Thickness(0),
-                CornerRadius = new CornerRadius(20),
-                Effect = new DropShadowEffect
-                {
-                    Color = Color.FromRgb(26, 17, 17),
-                    Opacity = 0.06,
-                    BlurRadius = 22,
-                    ShadowDepth = 8,
-                    Direction = 270
-                }
-            };
-
-            var grid = new Grid();
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-            var heading = new Grid();
-            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            heading.Children.Add(new TextBlock
-            {
-                Text = "Your library",
-                FontFamily = interFont,
-                FontSize = 13,
-                FontWeight = FontWeights.Bold,
-                Foreground = Brush("#1A1111"),
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            libraryCount = new TextBlock
-            {
-                Text = "0",
-                FontFamily = interFont,
-                FontSize = 10,
-                Foreground = Brush("#AB9F9A"),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            Grid.SetColumn(libraryCount, 1);
-            heading.Children.Add(libraryCount);
-            connectKoboButton = MakeHeaderButton(MakePlusIcon(), "Add an audiobook");
-            connectKoboButton.Click += delegate { ShowAddMenu(connectKoboButton); };
-            Grid.SetColumn(connectKoboButton, 2);
-            heading.Children.Add(connectKoboButton);
-            grid.Children.Add(heading);
-
-            searchBox = new TextBox
-            {
-                Height = 28,
-                Margin = new Thickness(0, 10, 0, 8),
-                Padding = new Thickness(9, 5, 9, 3),
-                BorderBrush = Brush("#E8DDD7"),
-                BorderThickness = new Thickness(1),
-                Background = Brush("#FFFFFF"),
-                FontFamily = interFont,
-                FontSize = 10,
-                Foreground = Brush("#1A1111"),
-                ToolTip = "Search your audiobook library"
-            };
-            searchBox.TextChanged += delegate { RefreshVisibleBooks(); };
-            Grid.SetRow(searchBox, 1);
-            grid.Children.Add(searchBox);
-
-            libraryList = new ListBox
-            {
-                ItemsSource = visibleBooks,
-                Background = Brushes.Transparent,
-                BorderThickness = new Thickness(0),
-                Padding = new Thickness(0),
-                HorizontalContentAlignment = HorizontalAlignment.Stretch
-            };
-            libraryList.SelectionChanged += LibraryListOnSelectionChanged;
-            libraryList.MouseDoubleClick += delegate { if (currentBook != null) PlayCurrent(); };
-            libraryList.ItemTemplate = BuildBookTemplate();
-            Grid.SetRow(libraryList, 2);
-            grid.Children.Add(libraryList);
-
-            statusText = new TextBlock
-            {
-                Text = "Press + to add an audiobook.",
-                TextWrapping = TextWrapping.Wrap,
-                FontFamily = interFont,
-                FontSize = 9,
-                Foreground = Brush("#AB9F9A"),
-                Margin = new Thickness(2, 8, 8, 0)
-            };
-            Grid.SetRow(statusText, 3);
-            grid.Children.Add(statusText);
-
-            librarySurface.Child = grid;
-            return librarySurface;
-        }
-
-        private DataTemplate BuildBookTemplate()
-        {
-            var template = new DataTemplate(typeof(BookEntry));
-            var border = new FrameworkElementFactory(typeof(Border));
-            border.SetValue(Border.PaddingProperty, new Thickness(10, 8, 10, 8));
-            border.SetValue(Border.MarginProperty, new Thickness(0, 0, 0, 5));
-            border.SetValue(Border.BackgroundProperty, Brush("#FFFFFF"));
-            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
-
-            var stack = new FrameworkElementFactory(typeof(StackPanel));
-            var title = new FrameworkElementFactory(typeof(TextBlock));
-            title.SetBinding(TextBlock.TextProperty, new Binding("Title"));
-            title.SetValue(TextBlock.FontFamilyProperty, interFont);
-            title.SetValue(TextBlock.FontSizeProperty, 11.0);
-            title.SetValue(TextBlock.FontWeightProperty, FontWeights.Bold);
-            title.SetValue(TextBlock.ForegroundProperty, Brush("#261D1B"));
-            title.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
-            stack.AppendChild(title);
-
-            var author = new FrameworkElementFactory(typeof(TextBlock));
-            author.SetBinding(TextBlock.TextProperty, new Binding("Author"));
-            author.SetValue(TextBlock.FontFamilyProperty, interFont);
-            author.SetValue(TextBlock.FontSizeProperty, 9.0);
-            author.SetValue(TextBlock.ForegroundProperty, Brush("#9B908C"));
-            author.SetValue(TextBlock.MarginProperty, new Thickness(0, 3, 0, 0));
-            author.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
-            stack.AppendChild(author);
-
-            var progress = new FrameworkElementFactory(typeof(TextBlock));
-            progress.SetBinding(TextBlock.TextProperty, new Binding("ProgressText"));
-            progress.SetValue(TextBlock.FontFamilyProperty, interFont);
-            progress.SetValue(TextBlock.FontSizeProperty, 8.0);
-            progress.SetValue(TextBlock.ForegroundProperty, accentBrush);
-            progress.SetValue(TextBlock.MarginProperty, new Thickness(0, 7, 0, 0));
-            stack.AppendChild(progress);
-
-            border.AppendChild(stack);
-            template.VisualTree = border;
-            return template;
         }
 
         private UIElement BuildExpandedPanel()
@@ -781,7 +642,7 @@ namespace Kapla
             }
             button.Background = active ? accentSoftBrush : Brushes.Transparent;
             button.BorderBrush = active ? accentBrush : Brushes.Transparent;
-            button.BorderThickness = active ? new Thickness(1.25) : new Thickness(1.25);
+            button.BorderThickness = new Thickness(1.25);
             button.Foreground = active
                 ? (IsDarkTheme ? Brush("#8DD3FF") : Brush("#285D78"))
                 : (IsDarkTheme ? Brush("#AAB3BD") : Brush("#8A1A1111"));
@@ -797,8 +658,8 @@ namespace Kapla
             border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
             border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
             var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
-            presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-            presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, new TemplateBindingExtension(Control.HorizontalContentAlignmentProperty));
+            presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, new TemplateBindingExtension(Control.VerticalContentAlignmentProperty));
             border.AppendChild(presenter);
             template.VisualTree = border;
             var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
@@ -846,6 +707,23 @@ namespace Kapla
                 ToolTip = "Search your audiobook library"
             };
             searchBox.TextChanged += delegate { RefreshVisibleBooks(); };
+            var searchContent = new Grid();
+            searchContent.Children.Add(searchBox);
+            var searchHint = new TextBlock
+            {
+                Text = "Search library",
+                FontFamily = interFont,
+                FontSize = 9.5,
+                Foreground = Brush("#8A7E7A"),
+                Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                IsHitTestVisible = false
+            };
+            searchContent.Children.Add(searchHint);
+            searchBox.TextChanged += delegate
+            {
+                searchHint.Visibility = String.IsNullOrEmpty(searchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+            };
             grid.Children.Add(new Border
             {
                 Height = 24,
@@ -853,7 +731,7 @@ namespace Kapla
                 BorderBrush = Brush("#18A7DDF7"),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(7),
-                Child = searchBox
+                Child = searchContent
             });
             libraryCount = new TextBlock
             {

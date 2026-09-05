@@ -34,7 +34,12 @@ namespace Kapla
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
             var categories = new StackPanel { Orientation = Orientation.Horizontal };
-            var content = new ContentControl { Margin = new Thickness(1, 5, 1, 0) };
+            var content = new ContentControl
+            {
+                Margin = new Thickness(1, 5, 1, 0),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                VerticalContentAlignment = VerticalAlignment.Stretch
+            };
             Grid.SetRow(content, 1);
             root.Children.Add(categories);
             root.Children.Add(content);
@@ -47,6 +52,11 @@ namespace Kapla
                 content.Content = BuildSettingsCategoryContent(category);
                 ApplyThemeToElement(content.Content as DependencyObject);
                 UpdateSettingsCategoryStates();
+                Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    ApplyThemeToElement(content);
+                    UpdateSettingsCategoryStates();
+                }), DispatcherPriority.Loaded);
             };
 
             foreach (var name in new[] { "General", "Playback", "Library", "Appearance" })
@@ -89,7 +99,7 @@ namespace Kapla
                 ? WithOpacity(accentBrush.Color, IsDarkTheme ? 0.34 : 0.24)
                 : Brushes.Transparent;
             button.BorderBrush = active ? accentBrush : Brushes.Transparent;
-            button.BorderThickness = active ? new Thickness(1.5) : new Thickness(1.25);
+            button.BorderThickness = new Thickness(1.5);
             button.Foreground = active
                 ? (IsDarkTheme ? Brush("#BCE8FF") : Brush("#17384A"))
                 : (IsDarkTheme ? Brush("#AAB3BD") : Brush("#8A7E7A"));
@@ -351,7 +361,7 @@ namespace Kapla
             libraryFoldersTextBox = new TextBox
             {
                 Text = String.Join("; ", appSettings.LibraryFolders),
-                Height = 20,
+                Height = 26,
                 Padding = new Thickness(7, 2, 7, 2),
                 FontFamily = interFont,
                 FontSize = 9.5,
@@ -425,7 +435,7 @@ namespace Kapla
             var state = current;
             var button = new Button
             {
-                Height = 20,
+                Height = 26,
                 HorizontalAlignment = HorizontalAlignment.Left,
                 Padding = new Thickness(0),
                 BorderThickness = new Thickness(0),
@@ -442,6 +452,7 @@ namespace Kapla
             {
                 state = !state;
                 button.Content = BuildSettingsToggleContent(label, state);
+                ApplyThemeToElement(button.Content as DependencyObject);
                 if (changed != null) changed(state);
                 SaveSettings();
             };
@@ -492,6 +503,7 @@ namespace Kapla
             {
                 Height = 23,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 Padding = new Thickness(7, 1, 6, 1),
                 FontFamily = interFont,
                 FontSize = 9.5,
@@ -501,7 +513,8 @@ namespace Kapla
                 Foreground = Brush("#6F625E"),
                 Cursor = options.Count > 1 ? Cursors.Hand : Cursors.Arrow,
                 Template = MakeRoundedButtonTemplate(6),
-                ToolTip = options.Count > 1 ? "Click to change" : null
+                ToolTip = options.Count > 1 ? "Choose " + label.ToLowerInvariant() : null,
+                IsEnabled = options.Count > 1
             };
             selector.Content = BuildSettingsChoiceContent(options.Count == 0 ? String.Empty : options[selectedIndex]);
             selector.Click += delegate
@@ -510,10 +523,14 @@ namespace Kapla
                 {
                     return;
                 }
-                selectedIndex = (selectedIndex + 1) % options.Count;
-                selector.Content = BuildSettingsChoiceContent(options[selectedIndex]);
-                if (changed != null) changed(options[selectedIndex]);
-                SaveSettings();
+                ShowChoiceMenu(selector, options, options[selectedIndex], delegate(string value)
+                {
+                    selectedIndex = options.IndexOf(value);
+                    selector.Content = BuildSettingsChoiceContent(value);
+                    if (changed != null) changed(value);
+                    ApplyThemeToElement(selector.Content as DependencyObject);
+                    SaveSettings();
+                });
             };
             Grid.SetColumn(selector, 1);
             row.Children.Add(selector);
@@ -522,7 +539,9 @@ namespace Kapla
 
         private UIElement BuildSettingsChoiceContent(string value)
         {
-            var row = new DockPanel { LastChildFill = false };
+            var row = new Grid();
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             var text = new TextBlock
             {
                 Text = value,
@@ -530,15 +549,13 @@ namespace Kapla
                 FontSize = 9.5,
                 Foreground = Brush("#6F625E"),
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                Width = 102,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            DockPanel.SetDock(text, Dock.Left);
             row.Children.Add(text);
             var arrow = MakeChevronIcon(false) as FrameworkElement;
             arrow.Width = 8;
             arrow.Height = 8;
-            DockPanel.SetDock(arrow, Dock.Right);
+            Grid.SetColumn(arrow, 1);
             row.Children.Add(arrow);
             return row;
         }
@@ -596,88 +613,5 @@ namespace Kapla
             };
         }
 
-        private UIElement MakeSettingsCheck(string label, bool current, Action<bool> changed)
-        {
-            var check = new CheckBox
-            {
-                Content = label,
-                IsChecked = current,
-                FontFamily = interFont,
-                FontSize = 9.5,
-                Foreground = Brush("#741A1111"),
-                Margin = new Thickness(105, 2, 0, 2)
-            };
-            check.Checked += delegate
-            {
-                if (changed != null) changed(true);
-                SaveSettings();
-            };
-            check.Unchecked += delegate
-            {
-                if (changed != null) changed(false);
-                SaveSettings();
-            };
-            return check;
-        }
-
-        private UIElement MakeSettingsValue(string label, IEnumerable<string> values, string selectedValue, Action<string> changed)
-        {
-            var row = new Grid { Margin = new Thickness(0, 2, 0, 2) };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(105) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
-            row.Children.Add(MakeSettingsLabel(label));
-            var combo = new ComboBox
-            {
-                Height = 23,
-                FontFamily = interFont,
-                FontSize = 9.5,
-                Padding = new Thickness(5, 0, 5, 0),
-                BorderBrush = Brush("#DED4CF"),
-                Background = Brushes.White,
-                ItemsSource = values.ToList(),
-                SelectedItem = selectedValue
-            };
-            if (combo.SelectedIndex < 0 && combo.Items.Count > 0)
-            {
-                combo.SelectedIndex = 0;
-            }
-            combo.IsEnabled = combo.Items.Count > 1 || changed != null;
-            combo.SelectionChanged += delegate
-            {
-                if (combo.SelectedItem != null && changed != null)
-                {
-                    changed(combo.SelectedItem.ToString());
-                    SaveSettings();
-                }
-            };
-            Grid.SetColumn(combo, 1);
-            row.Children.Add(combo);
-            return row;
-        }
-
-        private UIElement MakeVolumeSettingsRow()
-        {
-            var row = new Grid { Margin = new Thickness(0, 2, 0, 3) };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(105) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
-            row.Children.Add(MakeSettingsLabel("Volume"));
-            var slider = new Slider
-            {
-                Minimum = 0,
-                Maximum = 1,
-                Value = appSettings.Volume,
-                Height = 20,
-                Foreground = accentBrush
-            };
-            slider.ValueChanged += delegate
-            {
-                appSettings.Volume = slider.Value;
-                if (media != null) media.Volume = slider.Value;
-                SaveSettings();
-            };
-            Grid.SetColumn(slider, 1);
-            row.Children.Add(slider);
-            return row;
-        }
     }
 }
