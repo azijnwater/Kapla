@@ -1092,7 +1092,10 @@ namespace Kapla
             }
             else
             {
-                ordered = filtered.OrderByDescending(book => book.LastPlayedUtc).ThenBy(book => book.Title, StringComparer.OrdinalIgnoreCase);
+                // allBooks is maintained in installation order and persisted in that
+                // order. Keep the default shelf stable while playback updates
+                // LastPlayedUtc, so selecting a book never moves it.
+                ordered = filtered;
             }
             foreach (var book in ordered)
             {

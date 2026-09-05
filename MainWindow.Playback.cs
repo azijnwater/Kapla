@@ -154,7 +154,10 @@ namespace Kapla
 
         private async void FlushCurrentProgressToKobo()
         {
-            QueueKoboSynchronization(false, true);
+            // Pausing is still a useful checkpoint, but do not turn repeated
+            // play/pause clicks into a burst of network requests. The queue will
+            // honor the same cooldown as normal playback progress.
+            QueueKoboSynchronization(false, false);
             await ProcessKoboSyncQueueAsync();
         }
 
@@ -378,6 +381,7 @@ namespace Kapla
                 SaveLibrary();
             }
             if (!String.IsNullOrWhiteSpace(currentBook.KoboRevisionId)
+                && isPlaying
                 && KoboSyncPolicy.IsMeaningfulProgress(seconds, lastQueuedKoboPosition, 30))
             {
                 lastQueuedKoboPosition = seconds;
@@ -414,7 +418,7 @@ namespace Kapla
 
         private void ScheduleKoboProgressSync()
         {
-            if (koboClient == null || koboSession == null || currentBook == null || String.IsNullOrWhiteSpace(currentBook.KoboRevisionId) || currentBook.DurationSeconds <= 0)
+            if (!isPlaying || koboClient == null || koboSession == null || currentBook == null || String.IsNullOrWhiteSpace(currentBook.KoboRevisionId) || currentBook.DurationSeconds <= 0)
             {
                 return;
             }
@@ -442,9 +446,29 @@ namespace Kapla
             {
                 return;
             }
+            if (!includeLibrary && (currentBook == null || String.IsNullOrWhiteSpace(currentBook.KoboRevisionId)))
+            {
+                return;
+            }
+            // Background progress requests originate during active playback. A
+            // pending request may finish after pause or a track boundary, but
+            // idle UI actions must not create a new network request.
+            if (!includeLibrary && !immediate && !isPlaying && !koboSyncPending)
+            {
+                return;
+            }
             koboSyncPending = true;
             koboLibrarySyncPending = koboLibrarySyncPending || includeLibrary;
-            var requested = immediate ? DateTime.UtcNow : DateTime.UtcNow.AddSeconds(20);
+            var now = DateTime.UtcNow;
+            var requested = immediate ? now : now.Add(KoboSyncPolicy.ProgressSyncCooldown);
+            if (!immediate && lastKoboSyncUtc != DateTime.MinValue)
+            {
+                var afterLastSync = lastKoboSyncUtc.Add(KoboSyncPolicy.ProgressSyncCooldown);
+                if (afterLastSync > requested)
+                {
+                    requested = afterLastSync;
+                }
+            }
             if (nextKoboSyncAttemptUtc == DateTime.MaxValue || requested < nextKoboSyncAttemptUtc)
             {
                 nextKoboSyncAttemptUtc = requested;
@@ -454,7 +478,8 @@ namespace Kapla
 
         private async Task ProcessKoboSyncQueueAsync()
         {
-            if (koboClient != null && (DateTime.UtcNow - lastKoboLibraryRefreshUtc).TotalMinutes >= 10)
+            if (koboClient != null && isPlaying && IsKoboBook(currentBook)
+                && (DateTime.UtcNow - lastKoboLibraryRefreshUtc).TotalMinutes >= 10)
             {
                 QueueKoboSynchronization(true, false);
             }
@@ -607,9 +632,9 @@ namespace Kapla
         {
             Dispatcher.BeginInvoke(new Action(delegate
             {
-                if (e.IsAvailable)
+                if (e.IsAvailable && (koboSyncPending || (isPlaying && IsKoboBook(currentBook))))
                 {
-                    QueueKoboSynchronization(true, true);
+                    QueueKoboSynchronization(koboLibrarySyncPending, false);
                 }
                 else
                 {
@@ -723,7 +748,7 @@ namespace Kapla
             UpdateProgressDisplay(currentBook.PositionSeconds);
             SaveLibrary();
             RefreshVisibleBooks();
-            QueueKoboSynchronization(false, true);
+            QueueKoboSynchronization(false, false);
         }
 
         private void MediaOnMediaFailed(object sender, ExceptionRoutedEventArgs e)

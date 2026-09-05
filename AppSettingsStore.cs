@@ -26,6 +26,14 @@ namespace Kapla
                     {
                         value.LibraryFolders = new System.Collections.Generic.List<string>();
                     }
+                    // Library order is stable by default so selecting or playing a book
+                    // cannot reshuffle the shelf. Migrate the former recently-played
+                    // setting (and any unknown value) to the stable installation order.
+                    if (!String.Equals(value.LibrarySort, "Title", StringComparison.OrdinalIgnoreCase)
+                        && !String.Equals(value.LibrarySort, "Author", StringComparison.OrdinalIgnoreCase))
+                    {
+                        value.LibrarySort = "Installation order";
+                    }
                     if (value.DefaultPlaybackSpeed <= 0 || Double.IsNaN(value.DefaultPlaybackSpeed) || Double.IsInfinity(value.DefaultPlaybackSpeed))
                     {
                         value.DefaultPlaybackSpeed = 1.0;

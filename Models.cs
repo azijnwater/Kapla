@@ -160,7 +160,7 @@ namespace Kapla
             DefaultSleepMinutes = 30;
             Volume = 0.9;
             LibraryFolders = new List<string>();
-            LibrarySort = "Recently played";
+            LibrarySort = "Installation order";
             PreferredMetadataSource = "Embedded metadata first";
             AppearanceMode = "Light";
             AnimationsEnabled = true;

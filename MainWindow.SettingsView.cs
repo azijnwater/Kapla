@@ -378,7 +378,7 @@ namespace Kapla
             lower.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
             lower.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             var choices = new StackPanel();
-            choices.Children.Add(MakeCompactSettingsValue("Sort", new[] { "Recently played", "Title", "Author" }, appSettings.LibrarySort, value => { appSettings.LibrarySort = value; RefreshVisibleBooks(); }));
+            choices.Children.Add(MakeCompactSettingsValue("Sort", new[] { "Installation order", "Title", "Author" }, appSettings.LibrarySort, value => { appSettings.LibrarySort = value; RefreshVisibleBooks(); }));
             choices.Children.Add(MakeCompactSettingsValue("Metadata", new[] { "Embedded metadata first" }, appSettings.PreferredMetadataSource, value => appSettings.PreferredMetadataSource = value));
             lower.Children.Add(choices);
             var actions = new StackPanel();

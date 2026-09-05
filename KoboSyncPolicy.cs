@@ -4,6 +4,11 @@ namespace Kapla
 {
     internal static class KoboSyncPolicy
     {
+        public static TimeSpan ProgressSyncCooldown
+        {
+            get { return TimeSpan.FromMinutes(2); }
+        }
+
         public static bool IsMeaningfulProgress(double currentSeconds, double lastQueuedSeconds, double thresholdSeconds)
         {
             if (Double.IsNaN(currentSeconds) || Double.IsInfinity(currentSeconds) || currentSeconds < 0)

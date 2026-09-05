@@ -255,7 +255,8 @@ namespace Kapla
             SizeChanged += delegate { UpdateResponsiveLayout(); };
             Activated += delegate
             {
-                if (koboClient != null && (DateTime.UtcNow - lastKoboSyncUtc).TotalMinutes >= 2)
+                if (koboClient != null && isPlaying && IsKoboBook(currentBook)
+                    && (DateTime.UtcNow - lastKoboSyncUtc).TotalMinutes >= 10)
                 {
                     QueueKoboSynchronization(true, false);
                 }

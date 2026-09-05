@@ -166,6 +166,7 @@ namespace Kapla.Tests
             Check("negative Kobo progress is ignored", !KoboSyncPolicy.IsMeaningfulProgress(-1, 10, 30));
             Check("Kobo progress threshold has a one-second floor", !KoboSyncPolicy.IsMeaningfulProgress(10.5, 10, 0));
             CheckEqual("Kobo progress keeps fractional position", 12.5, KoboSyncPolicy.ProgressPercent(75, 600));
+            CheckEqual("Kobo progress sync cooldown", TimeSpan.FromMinutes(2), KoboSyncPolicy.ProgressSyncCooldown);
             CheckEqual("first retry delay", TimeSpan.FromSeconds(5), KoboSyncPolicy.RetryDelay(1));
             CheckEqual("nonpositive failure count uses first retry delay", TimeSpan.FromSeconds(5), KoboSyncPolicy.RetryDelay(0));
             CheckEqual("retry delay grows", TimeSpan.FromSeconds(40), KoboSyncPolicy.RetryDelay(4));
@@ -233,6 +234,7 @@ namespace Kapla.Tests
             CheckEqual("settings theme round-trip", "Dark", loaded.AppearanceMode);
             CheckEqual("settings cover visibility round-trip", false, loaded.ShowCoverArtwork);
             CheckEqual("settings progress mode round-trip", PlaybackProgress.BookMode, loaded.ProgressDisplayMode);
+            CheckEqual("settings default library order is stable", "Installation order", new AppSettings().LibrarySort);
             File.WriteAllText(path, "not json");
             var repaired = AppSettingsStore.Load(path);
             CheckEqual("corrupt settings recover default speed", 1.0, repaired.DefaultPlaybackSpeed);
@@ -247,6 +249,7 @@ namespace Kapla.Tests
                 DefaultSleepMinutes = 0,
                 Volume = 2,
                 LibraryFolders = null,
+                LibrarySort = "Recently played",
                 AppearanceMode = "Sepia",
                 ProgressDisplayMode = "Unknown"
             });
@@ -259,6 +262,7 @@ namespace Kapla.Tests
             CheckEqual("missing settings folders recover empty collection", 0, normalized.LibraryFolders.Count);
             CheckEqual("invalid settings theme recovers light", "Light", normalized.AppearanceMode);
             CheckEqual("invalid progress mode recovers chapter mode", PlaybackProgress.ChapterMode, normalized.ProgressDisplayMode);
+            CheckEqual("legacy recently played order migrates", "Installation order", normalized.LibrarySort);
 
             var missing = AppSettingsStore.Load(TempPath(root, "missing-settings.json"));
             CheckEqual("missing settings use default speed", 1.0, missing.DefaultPlaybackSpeed);
