@@ -42,6 +42,7 @@ $references = @(
     (Join-Path $frameworkDirectory "System.Runtime.WindowsRuntime.dll"),
     (Join-Path $winMetadataDirectory "Windows.Foundation.winmd"),
     (Join-Path $winMetadataDirectory "Windows.Media.winmd"),
+    (Join-Path $winMetadataDirectory "Windows.Storage.winmd"),
     (Join-Path $wpfDirectory "WindowsBase.dll"),
     (Join-Path $wpfDirectory "PresentationCore.dll"),
     (Join-Path $wpfDirectory "PresentationFramework.dll"),

@@ -337,7 +337,6 @@ namespace Kapla
             {
                 UpdateSleepTimerUi();
             }
-            UpdateMiniPlayer();
             if (currentBook == null || !sourceLoaded || isDraggingProgress)
             {
                 return;

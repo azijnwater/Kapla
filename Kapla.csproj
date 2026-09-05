@@ -30,6 +30,10 @@
       <HintPath>$(WINDIR)\System32\WinMetadata\Windows.Media.winmd</HintPath>
       <IsWinMDFile>true</IsWinMDFile>
     </Reference>
+    <Reference Include="Windows.Storage">
+      <HintPath>$(WINDIR)\System32\WinMetadata\Windows.Storage.winmd</HintPath>
+      <IsWinMDFile>true</IsWinMDFile>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Content Include="Assets\**\*">

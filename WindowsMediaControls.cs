@@ -1,8 +1,12 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.WindowsRuntime;
 using System.Windows.Threading;
+using Windows.Foundation;
 using Windows.Media;
+using Windows.Storage;
+using Windows.Storage.Streams;
 
 namespace Kapla
 {
@@ -94,7 +98,8 @@ namespace Kapla
                 return;
             }
 
-            var key = (book.Path ?? String.Empty) + "\n" + (book.Title ?? String.Empty) + "\n" + (book.Author ?? String.Empty);
+            var key = (book.Path ?? String.Empty) + "\n" + (book.Title ?? String.Empty) + "\n" + (book.Author ?? String.Empty)
+                + "\n" + (book.CoverPath ?? String.Empty);
             chapterTitle = chapterTitle ?? String.Empty;
             if (String.Equals(key, displayedBookKey, StringComparison.Ordinal)
                 && String.Equals(chapterTitle, displayedChapter, StringComparison.Ordinal))
@@ -110,9 +115,52 @@ namespace Kapla
             updater.MusicProperties.AlbumTitle = String.IsNullOrWhiteSpace(chapterTitle)
                 ? (book.Album ?? String.Empty)
                 : chapterTitle;
+            updater.Thumbnail = null;
             updater.Update();
             displayedBookKey = key;
             displayedChapter = chapterTitle;
+            SetThumbnailAsync(key, book.CoverPath);
+        }
+
+        private void SetThumbnailAsync(string bookKey, string coverPath)
+        {
+            if (String.IsNullOrWhiteSpace(coverPath) || !File.Exists(coverPath))
+            {
+                return;
+            }
+
+            try
+            {
+                var operation = StorageFile.GetFileFromPathAsync(coverPath);
+                operation.Completed = delegate(IAsyncOperation<StorageFile> completed, AsyncStatus status)
+                {
+                    if (status != AsyncStatus.Completed || disposed)
+                    {
+                        return;
+                    }
+                    dispatcher.BeginInvoke(new Action(delegate
+                    {
+                        if (disposed || controls == null || !String.Equals(displayedBookKey, bookKey, StringComparison.Ordinal))
+                        {
+                            return;
+                        }
+                        try
+                        {
+                            controls.DisplayUpdater.Thumbnail = RandomAccessStreamReference.CreateFromFile(completed.GetResults());
+                            controls.DisplayUpdater.Update();
+                        }
+                        catch
+                        {
+                            // Album artwork is optional; media controls remain usable if it cannot be read.
+                        }
+                    }));
+                };
+            }
+            catch
+            {
+                // Album artwork is optional; media controls remain usable if it
+                // cannot be read by the Windows Runtime.
+            }
         }
 
         public void UpdatePlaybackState(bool hasBook, bool isPlaying)

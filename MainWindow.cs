@@ -115,7 +115,6 @@ namespace Kapla
         private Border progressThumb;
         private MediaElement media;
         private WindowsMediaControls windowsMediaControls;
-        private MiniPlayerWindow miniPlayer;
         private FontFamily interFont;
         private SolidColorBrush accentBrush = Brush("#7DD3FC");
         private SolidColorBrush accentSoftBrush = Brush("#247DD3FC");
@@ -251,7 +250,6 @@ namespace Kapla
             koboSyncTimer.Start();
 
             SizeChanged += delegate { UpdateResponsiveLayout(); };
-            StateChanged += MainWindowStateChanged;
             Activated += delegate
             {
                 if (koboClient != null && (DateTime.UtcNow - lastKoboSyncUtc).TotalMinutes >= 2)
@@ -284,11 +282,6 @@ namespace Kapla
             NetworkChange.NetworkAvailabilityChanged -= NetworkAvailabilityChanged;
             progressTimer.Stop();
             koboSyncTimer.Stop();
-            if (miniPlayer != null)
-            {
-                miniPlayer.Close();
-                miniPlayer = null;
-            }
             if (windowsMediaControls != null)
             {
                 windowsMediaControls.Dispose();
