@@ -390,7 +390,7 @@ namespace Kapla
             });
             content.Children.Add(new TextBlock
             {
-                Text = "Saving your Kobo listening position…",
+                Text = "Saving your Kobo listening position...",
                 FontFamily = interFont,
                 FontSize = 8.5,
                 Foreground = IsDarkTheme ? Brush("#AAB3BD") : Brush("#8A7E7A"),
