@@ -127,8 +127,11 @@ namespace Kapla
             var libraryGrid = new Grid();
             libraryGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(31) });
             libraryGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            libraryGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(14) });
-            libraryGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(9) });
+            // Keep the scrollbar in its own compact lane. The old fixed rows (14 + 9)
+            // took enough height from the list to clip the final status line on smaller
+            // expanded windows, even though the scrollbar itself is only a few pixels tall.
+            libraryGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(10) });
+            libraryGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var libraryHeading = new Grid { Margin = new Thickness(9, 0, 7, 0) };
             libraryHeading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             libraryHeading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -208,6 +211,7 @@ namespace Kapla
                 ItemsSource = FilteredKoboBooks(String.Empty),
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
+                VerticalContentAlignment = VerticalAlignment.Top,
                 ItemTemplate = BuildRemoteKoboCoverTemplate(),
                 ItemContainerStyle = BuildShelfItemStyle(),
                 SelectionMode = SelectionMode.Multiple
@@ -231,11 +235,11 @@ namespace Kapla
             koboLibraryScrollBar = new System.Windows.Controls.Primitives.ScrollBar
             {
                 Orientation = Orientation.Horizontal,
-                Height = 6,
+                Height = 5,
                 Minimum = 0,
                 SmallChange = 70,
                 LargeChange = 280,
-                Margin = new Thickness(9, 4, 9, 4),
+                Margin = new Thickness(9, 2, 9, 2),
                 VerticalAlignment = VerticalAlignment.Center
             };
             koboLibraryScrollBar.ValueChanged += delegate
