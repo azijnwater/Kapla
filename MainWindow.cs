@@ -153,6 +153,7 @@ namespace Kapla
         private bool libraryExpanded;
         private bool isPinned;
         private bool closeAfterKoboSync;
+        private Window closingSyncDialog;
         private bool purgingData;
         private string expandedView = "library";
         private string settingsCategory = "General";
@@ -286,6 +287,7 @@ namespace Kapla
             NetworkChange.NetworkAvailabilityChanged -= NetworkAvailabilityChanged;
             progressTimer.Stop();
             koboSyncTimer.Stop();
+            CloseClosingSyncDialog();
             if (windowsMediaControls != null)
             {
                 windowsMediaControls.Dispose();
@@ -308,12 +310,24 @@ namespace Kapla
             SaveLibrary();
             SaveWindowPosition();
             SaveSettings();
-            if (koboClient != null && !closeAfterKoboSync)
+            if (koboClient != null && currentBook != null
+                && !String.IsNullOrWhiteSpace(currentBook.KoboRevisionId)
+                && !closeAfterKoboSync)
             {
                 e.Cancel = true;
+                if (progressTimer != null)
+                {
+                    progressTimer.Stop();
+                }
+                if (koboSyncTimer != null)
+                {
+                    koboSyncTimer.Stop();
+                }
+                ShowClosingSyncDialog();
                 if (statusText != null) statusText.Text = "Saving your position and syncing Kobo…";
                 QueueKoboSynchronization(false, true);
                 await ProcessKoboSyncQueueAsync();
+                CloseClosingSyncDialog();
                 closeAfterKoboSync = true;
                 Close();
                 return;
@@ -322,6 +336,90 @@ namespace Kapla
             {
                 koboClient.Dispose();
             }
+        }
+
+        private void ShowClosingSyncDialog()
+        {
+            if (closingSyncDialog != null)
+            {
+                return;
+            }
+
+            closingSyncDialog = new Window
+            {
+                Title = "Kapla",
+                Owner = this,
+                Width = 250,
+                Height = 112,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                WindowStyle = WindowStyle.None,
+                ResizeMode = ResizeMode.NoResize,
+                AllowsTransparency = true,
+                Background = Brushes.Transparent,
+                ShowInTaskbar = false,
+                FontFamily = interFont,
+                Topmost = Topmost
+            };
+
+            var card = new Border
+            {
+                Margin = new Thickness(10),
+                Padding = new Thickness(18, 14, 18, 14),
+                CornerRadius = new CornerRadius(11),
+                Background = IsDarkTheme ? Brush("#232830") : Brush("#FDF8F4"),
+                BorderBrush = IsDarkTheme ? Brush("#405063") : Brush("#E8DDD7"),
+                BorderThickness = new Thickness(1),
+                Effect = new DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    Opacity = 0.2,
+                    BlurRadius = 20,
+                    ShadowDepth = 6,
+                    Direction = 270
+                }
+            };
+            var content = new StackPanel();
+            content.Children.Add(new TextBlock
+            {
+                Text = "Sync in progress",
+                FontFamily = interFont,
+                FontSize = 12,
+                FontWeight = FontWeights.Bold,
+                Foreground = IsDarkTheme ? Brush("#F4F0EC") : Brush("#1A1111"),
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+            content.Children.Add(new TextBlock
+            {
+                Text = "Saving your Kobo listening position…",
+                FontFamily = interFont,
+                FontSize = 8.5,
+                Foreground = IsDarkTheme ? Brush("#AAB3BD") : Brush("#8A7E7A"),
+                Margin = new Thickness(0, 4, 0, 9),
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+            content.Children.Add(new ProgressBar
+            {
+                Height = 4,
+                Minimum = 0,
+                Maximum = 100,
+                IsIndeterminate = true,
+                Foreground = accentBrush,
+                Background = accentSoftBrush
+            });
+            card.Child = content;
+            closingSyncDialog.Content = card;
+            closingSyncDialog.Show();
+        }
+
+        private void CloseClosingSyncDialog()
+        {
+            if (closingSyncDialog == null)
+            {
+                return;
+            }
+            var dialog = closingSyncDialog;
+            closingSyncDialog = null;
+            dialog.Close();
         }
     }
 }
