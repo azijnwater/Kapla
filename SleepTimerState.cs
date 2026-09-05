@@ -14,6 +14,7 @@ namespace Kapla
         public SleepTimerMode Mode { get; private set; }
         public DateTime? ExpiresUtc { get; private set; }
         public double? ChapterEndSeconds { get; private set; }
+        public TimeSpan? Duration { get; private set; }
         public bool IsActive { get { return Mode != SleepTimerMode.Off; } }
 
         public void StartDuration(DateTime nowUtc, TimeSpan duration)
@@ -25,6 +26,7 @@ namespace Kapla
             Mode = SleepTimerMode.Duration;
             ExpiresUtc = nowUtc.Add(duration);
             ChapterEndSeconds = null;
+            Duration = duration;
         }
 
         public void StartEndOfChapter(double chapterEndSeconds, double currentPositionSeconds)
@@ -36,6 +38,7 @@ namespace Kapla
             Mode = SleepTimerMode.EndOfChapter;
             ChapterEndSeconds = chapterEndSeconds;
             ExpiresUtc = null;
+            Duration = null;
         }
 
         public bool HasExpired(DateTime nowUtc, double currentPositionSeconds)
@@ -62,6 +65,7 @@ namespace Kapla
             Mode = SleepTimerMode.Off;
             ExpiresUtc = null;
             ChapterEndSeconds = null;
+            Duration = null;
         }
     }
 }

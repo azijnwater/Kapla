@@ -633,7 +633,12 @@ namespace Kapla
             };
             root.Children.Add(navigationRail);
 
-            expandedContentHost = new ContentControl { Margin = new Thickness(0, 7, 0, 3) };
+            expandedContentHost = new ContentControl
+            {
+                Margin = new Thickness(0, 7, 0, 3),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                VerticalContentAlignment = VerticalAlignment.Stretch
+            };
             Grid.SetRow(expandedContentHost, 1);
             root.Children.Add(expandedContentHost);
 

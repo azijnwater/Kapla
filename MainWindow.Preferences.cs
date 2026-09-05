@@ -265,6 +265,7 @@ namespace Kapla
             SetPanelTabState(koboTabButton, expandedView == "kobo");
             UpdateSettingsCategoryStates();
             UpdateExpandedSyncBadge();
+            UpdateSleepTimerUi();
             if (animate) AnimateIn(rootLayout, 210, 0);
             SaveSettings();
         }

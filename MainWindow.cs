@@ -98,6 +98,9 @@ namespace Kapla
         private string currentSyncStatus = "Offline";
         private TextBlock sleepRemainingText;
         private Button sleepCancelButton;
+        private readonly List<Button> sleepDurationButtons = new List<Button>();
+        private Button sleepEndChapterButton;
+        private TextBlock sleepTimerCaption;
         private Button playButton;
         private Button chapterPreviousButton;
         private Button chapterNextButton;

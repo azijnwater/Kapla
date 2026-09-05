@@ -214,7 +214,15 @@ namespace Kapla
             Canvas.SetTop(forwardButton, 155);
             controls.Children.Add(forwardButton);
 
-            sleepTimerButton = MakeTransportButton("moon.svg", "Sleep timer", (int?)null);
+            sleepTimerCaption = FigmaText("SLEEP", 7, FontWeights.SemiBold, Brush("#8A7E7A"));
+            sleepTimerCaption.Width = 32;
+            sleepTimerCaption.Height = 9;
+            sleepTimerCaption.TextAlignment = TextAlignment.Center;
+            Canvas.SetLeft(sleepTimerCaption, 298);
+            Canvas.SetTop(sleepTimerCaption, 139);
+            controls.Children.Add(sleepTimerCaption);
+
+            sleepTimerButton = MakeSleepTimerButton();
             sleepTimerButton.Click += SleepTimerButtonOnClick;
             Canvas.SetLeft(sleepTimerButton, 298);
             Canvas.SetTop(sleepTimerButton, 155);
@@ -536,6 +544,55 @@ namespace Kapla
             };
             AttachMicroInteraction(button, 1.04);
             return button;
+        }
+
+        private Button MakeSleepTimerButton()
+        {
+            var button = new Button
+            {
+                Width = 32,
+                Height = 32,
+                Padding = new Thickness(0),
+                BorderThickness = new Thickness(0),
+                Background = Brushes.Transparent,
+                Cursor = Cursors.Hand,
+                ToolTip = "Sleep timer",
+                Template = MakeRoundedButtonTemplate(7)
+            };
+            AttachMicroInteraction(button, 1.04);
+            UpdateSleepTimerButtonVisual(false, null, button);
+            return button;
+        }
+
+        private void UpdateSleepTimerButtonVisual(bool active, string label, Button target = null)
+        {
+            var button = target ?? sleepTimerButton;
+            if (button == null)
+            {
+                return;
+            }
+            var surface = new Border
+            {
+                Width = 32,
+                Height = 32,
+                CornerRadius = new CornerRadius(7),
+                Background = active ? accentSoftBrush : Brushes.Transparent,
+                Child = SvgIconFactory.LoadTinted("Figma", "moon.svg", 16, 16,
+                    active ? accentBrush.Color : HeaderIconColor(false))
+            };
+            button.Content = surface;
+            button.ToolTip = active && !String.IsNullOrWhiteSpace(label)
+                ? "Sleep timer: " + label
+                : "Sleep timer";
+            if (sleepTimerCaption != null)
+            {
+                sleepTimerCaption.Text = active && sleepTimer.Mode == SleepTimerMode.EndOfChapter
+                    ? "END"
+                    : active && sleepTimer.Duration.HasValue
+                        ? Math.Max(1, (int)Math.Round(sleepTimer.Duration.Value.TotalMinutes)) + "m"
+                        : "SLEEP";
+                sleepTimerCaption.Foreground = active ? accentBrush : (IsDarkTheme ? Brush("#AAB3BD") : Brush("#8A7E7A"));
+            }
         }
 
         private Button MakeFigmaPlayButton()

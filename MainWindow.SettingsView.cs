@@ -281,7 +281,13 @@ namespace Kapla
 
         private UIElement BuildSleepTimerSettingsControl()
         {
-            var root = new StackPanel { Margin = new Thickness(0, 3, 0, 2) };
+            sleepDurationButtons.Clear();
+            sleepEndChapterButton = null;
+
+            var root = new Grid { Margin = new Thickness(0, 3, 0, 2), MinHeight = 76 };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             var heading = new Grid();
             heading.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -291,32 +297,46 @@ namespace Kapla
             heading.Children.Add(sleepRemainingText);
             root.Children.Add(heading);
 
-            var presets = new WrapPanel { Margin = new Thickness(0, 3, 0, 0) };
+            var presets = new WrapPanel { Margin = new Thickness(0, 3, 0, 3) };
             foreach (var minutes in new[] { 5, 15, 30, 60 })
             {
                 var value = minutes;
-                var button = MakeCompactActionButton(value + " min", false);
+                var button = MakeSleepDurationButton(value, 24, new Thickness(0, 0, 4, 4));
                 button.Height = 22;
                 button.Padding = new Thickness(7, 2, 7, 2);
-                button.Margin = new Thickness(0, 0, 4, 4);
                 button.Click += delegate { StartSleepTimer(value); };
                 presets.Children.Add(button);
             }
             var end = MakeCompactActionButton("End chapter", false);
+            sleepEndChapterButton = end;
+            end.Tag = -1;
             end.Height = 22;
             end.Padding = new Thickness(7, 2, 7, 2);
             end.Margin = new Thickness(0, 0, 4, 4);
             end.IsEnabled = CurrentChapterEndSeconds().HasValue;
             end.Click += delegate { StartSleepTimerAtChapterEnd(); };
             presets.Children.Add(end);
+            Grid.SetRow(presets, 1);
+            root.Children.Add(presets);
+
+            var footer = new Grid { Margin = new Thickness(0, 1, 0, 0) };
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var hint = FigmaText("Pauses playback and saves your position.", 8.5, FontWeights.Normal, Brush("#8A7E7A"));
+            hint.VerticalAlignment = VerticalAlignment.Center;
+            footer.Children.Add(hint);
             sleepCancelButton = MakeCompactActionButton("Cancel", false);
-            sleepCancelButton.Height = 22;
+            sleepCancelButton.Width = 78;
+            sleepCancelButton.Height = 26;
             sleepCancelButton.Padding = new Thickness(7, 2, 7, 2);
-            sleepCancelButton.Margin = new Thickness(0, 0, 4, 4);
+            sleepCancelButton.Template = MakeRoundedButtonTemplate(5);
             sleepCancelButton.IsEnabled = sleepTimer.IsActive;
             sleepCancelButton.Click += delegate { CancelSleepTimer("Sleep timer cancelled."); };
-            presets.Children.Add(sleepCancelButton);
-            root.Children.Add(presets);
+            Grid.SetColumn(sleepCancelButton, 1);
+            footer.Children.Add(sleepCancelButton);
+            Grid.SetRow(footer, 2);
+            root.Children.Add(footer);
+            UpdateSleepTimerUi();
             return root;
         }
 

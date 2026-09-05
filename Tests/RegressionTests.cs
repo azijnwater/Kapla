@@ -143,14 +143,17 @@ namespace Kapla.Tests
             var timer = new SleepTimerState();
             timer.StartDuration(now, TimeSpan.FromSeconds(2));
             Check("duration sleep timer active", timer.IsActive);
+            CheckEqual("duration sleep timer keeps selected duration", 2.0, timer.Duration.Value.TotalSeconds);
             Check("duration sleep timer waits", !timer.HasExpired(now.AddSeconds(1), 0));
             Check("duration sleep timer expires", timer.HasExpired(now.AddSeconds(2), 0));
             timer.StartEndOfChapter(120, 90);
             Check("restarting sleep timer replaces previous mode", timer.Mode == SleepTimerMode.EndOfChapter && !timer.ExpiresUtc.HasValue);
+            Check("end-of-chapter clears selected duration", !timer.Duration.HasValue);
             Check("end-of-chapter timer waits", !timer.HasExpired(now, 119));
             Check("end-of-chapter timer expires", timer.HasExpired(now, 120));
             timer.Cancel();
             Check("sleep timer cancellation", !timer.IsActive);
+            Check("sleep timer cancellation clears duration", !timer.Duration.HasValue);
         }
 
         private static void KoboSyncPolicyTests()
