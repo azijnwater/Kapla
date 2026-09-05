@@ -246,7 +246,8 @@ namespace Kapla
                     }
 
                     var readingState = FindDictionary(item, "ReadingState");
-                    var entitlement = FindDictionary(item, "BookEntitlement");
+                    var entitlement = FindDictionary(item, "AudiobookEntitlement")
+                        ?? FindDictionary(item, "BookEntitlement");
                     var entitlementId = FirstString(readingState, "EntitlementId")
                         ?? FirstString(metadata, "EntitlementId")
                         ?? FirstString(entitlement, "Id", "EntitlementId")

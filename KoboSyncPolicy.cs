@@ -52,5 +52,14 @@ namespace Kapla
         {
             return !String.IsNullOrWhiteSpace(entitlementId) ? entitlementId : revisionId;
         }
+
+        // Reading-state PUTs must use the entitlement id. A revision id can
+        // identify the title, but Kobo rejects it as the {Ids} value for a
+        // progress update (HTTP 400). Keep this separate from the broader
+        // migration helper above, which is still useful for matching books.
+        public static string ProgressUploadId(string entitlementId)
+        {
+            return String.IsNullOrWhiteSpace(entitlementId) ? null : entitlementId.Trim();
+        }
     }
 }

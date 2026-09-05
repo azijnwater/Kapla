@@ -515,9 +515,22 @@ namespace Kapla
                 {
                     await SyncKoboLibraryAsync(false);
                 }
+                // SyncKoboLibraryAsync can fill in the entitlement id for
+                // libraries created by older Kapla versions. Re-resolve the
+                // snapshot by path after that refresh so the PUT never uses a
+                // stale object or a revision id.
+                if (syncBook != null && !String.IsNullOrWhiteSpace(syncBook.Path))
+                {
+                    var refreshedBook = allBooks.FirstOrDefault(book => book != null
+                        && String.Equals(book.Path, syncBook.Path, StringComparison.OrdinalIgnoreCase));
+                    if (refreshedBook != null)
+                    {
+                        syncBook = refreshedBook;
+                    }
+                }
                 var progressId = syncBook == null
                     ? null
-                    : KoboSyncPolicy.PreferredProgressId(syncBook.KoboEntitlementId, syncBook.KoboRevisionId);
+                    : KoboSyncPolicy.ProgressUploadId(syncBook.KoboEntitlementId);
                 if (!String.IsNullOrWhiteSpace(progressId) && duration > 0)
                 {
                     try
@@ -556,6 +569,21 @@ namespace Kapla
                         SetSyncStatus("Sync issue", progressDetail);
                         return;
                     }
+                }
+                else if (syncBook != null && duration > 0 && !String.IsNullOrWhiteSpace(syncBook.KoboRevisionId))
+                {
+                    // A title/revision without an entitlement is not a valid
+                    // Kobo reading-state target. Leave the exact position in
+                    // the local library and wait for a later library refresh,
+                    // rather than producing a known HTTP 400 request.
+                    koboSyncFailures = 0;
+                    koboSyncPending = false;
+                    koboLibrarySyncPending = false;
+                    nextKoboSyncAttemptUtc = DateTime.MaxValue;
+                    var missingEntitlementDetail = "Progress saved locally; Kobo did not return an entitlement id yet. Choose Sync Kobo now to retry.";
+                    statusText.Text = missingEntitlementDetail;
+                    SetSyncStatus("Kobo link needed", missingEntitlementDetail);
+                    return;
                 }
                 KoboSessionStore.Save(dataDirectory, koboSession);
                 lastKoboSyncUtc = DateTime.UtcNow;

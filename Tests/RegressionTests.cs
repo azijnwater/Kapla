@@ -176,6 +176,9 @@ namespace Kapla.Tests
             CheckEqual("entitlement id is preferred for progress", "entitlement", KoboSyncPolicy.PreferredProgressId("entitlement", "revision"));
             CheckEqual("revision id remains a migration fallback", "revision", KoboSyncPolicy.PreferredProgressId(null, "revision"));
             CheckEqual("blank entitlement id uses revision fallback", "revision", KoboSyncPolicy.PreferredProgressId("  ", "revision"));
+            CheckEqual("progress upload requires entitlement id", "entitlement", KoboSyncPolicy.ProgressUploadId(" entitlement "));
+            CheckEqual<string>("progress upload never falls back to revision", null, KoboSyncPolicy.ProgressUploadId(null));
+            CheckEqual<string>("blank progress entitlement is not uploaded", null, KoboSyncPolicy.ProgressUploadId("  "));
         }
 
         private static void KoboEndpointSecurityTests()
