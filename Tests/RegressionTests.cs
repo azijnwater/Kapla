@@ -179,6 +179,15 @@ namespace Kapla.Tests
             CheckEqual("progress upload requires entitlement id", "entitlement", KoboSyncPolicy.ProgressUploadId(" entitlement "));
             CheckEqual<string>("progress upload never falls back to revision", null, KoboSyncPolicy.ProgressUploadId(null));
             CheckEqual<string>("blank progress entitlement is not uploaded", null, KoboSyncPolicy.ProgressUploadId("  "));
+            var audioLocation = KoboSyncPolicy.AudioTimestampLocation(12.345);
+            CheckEqual("Kobo audiobook location type", "AudioTimestamp", Convert.ToString(audioLocation["Type"]));
+            CheckEqual("Kobo audiobook location keeps exact seconds", "12.345", Convert.ToString(audioLocation["Value"]));
+            CheckEqual("Kobo audiobook location has empty source", String.Empty, Convert.ToString(audioLocation["Source"]));
+            CheckEqual("invalid audiobook location is clamped", "0", Convert.ToString(KoboSyncPolicy.AudioTimestampLocation(Double.NaN)["Value"]));
+            CheckEqual("tiny positive progress is reading", "Reading", KoboSyncPolicy.ReadingStatus(0.01, 100));
+            CheckEqual("zero progress is ready", "ReadyToRead", KoboSyncPolicy.ReadingStatus(0, 100));
+            CheckEqual("completed progress is finished", "Finished", KoboSyncPolicy.ReadingStatus(100, 100));
+            CheckEqual("rounded 99 percent is not prematurely finished", "Reading", KoboSyncPolicy.ReadingStatus(99.4, 100));
         }
 
         private static void KoboEndpointSecurityTests()

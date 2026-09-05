@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 
 namespace Kapla
 {
@@ -60,6 +62,33 @@ namespace Kapla
         public static string ProgressUploadId(string entitlementId)
         {
             return String.IsNullOrWhiteSpace(entitlementId) ? null : entitlementId.Trim();
+        }
+
+        public static Dictionary<string, object> AudioTimestampLocation(double positionSeconds)
+        {
+            var safePosition = Double.IsNaN(positionSeconds) || Double.IsInfinity(positionSeconds)
+                ? 0
+                : Math.Max(0, positionSeconds);
+            return new Dictionary<string, object>
+            {
+                { "Value", safePosition.ToString("R", CultureInfo.InvariantCulture) },
+                { "Type", "AudioTimestamp" },
+                { "Source", String.Empty }
+            };
+        }
+
+        public static string ReadingStatus(double positionSeconds, double durationSeconds)
+        {
+            if (Double.IsNaN(positionSeconds) || Double.IsInfinity(positionSeconds) || positionSeconds <= 0)
+            {
+                return "ReadyToRead";
+            }
+            if (!Double.IsNaN(durationSeconds) && !Double.IsInfinity(durationSeconds)
+                && durationSeconds > 0 && positionSeconds >= durationSeconds)
+            {
+                return "Finished";
+            }
+            return "Reading";
         }
     }
 }

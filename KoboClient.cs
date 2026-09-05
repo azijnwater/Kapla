@@ -506,17 +506,18 @@ namespace Kapla
             bookmark["ProgressPercent"] = percent;
             bookmark["ContentSourceProgressPercent"] = percent;
             bookmark["LastModified"] = timestamp;
-            if (!bookmark.ContainsKey("Location"))
-            {
-                bookmark["Location"] = null;
-            }
+            // Kobo uses this AudioTimestamp, not the rounded percentage, as the
+            // precise resume point for audiobooks. A null location is rejected
+            // for a new bookmark, while preserving the server's old location
+            // makes playback resume at a stale time.
+            bookmark["Location"] = KoboSyncPolicy.AudioTimestampLocation(positionSeconds);
             var statistics = GetValue(currentState, "Statistics") as Dictionary<string, object> ?? new Dictionary<string, object>();
             statistics["LastModified"] = timestamp;
             statistics["SpentReadingMinutes"] = (int)Math.Floor(Math.Max(0, positionSeconds) / 60);
             statistics["RemainingTimeMinutes"] = (int)Math.Ceiling(Math.Max(0, durationSeconds - positionSeconds) / 60);
             var statusInfo = GetValue(currentState, "StatusInfo") as Dictionary<string, object> ?? new Dictionary<string, object>();
             statusInfo["LastModified"] = timestamp;
-            statusInfo["Status"] = percent >= 99 ? "Finished" : percent <= 0 ? "ReadyToRead" : "Reading";
+            statusInfo["Status"] = KoboSyncPolicy.ReadingStatus(positionSeconds, durationSeconds);
             var state = new Dictionary<string, object>
             {
                 {
