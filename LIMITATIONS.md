@@ -6,7 +6,7 @@ Moving this WPF application to TypeScript requires a major framework rewrite. Ka
 
 ## Physical lock-screen controls — UNVERIFIED
 
-Windows System Media Transport Controls are implemented for play, pause, seeking, and skipping. Playback was verified to continue while Kapla was minimized, and the application remained responsive.
+Windows System Media Transport Controls are implemented for play, pause, seeking, and skipping. Kapla now requests the correct default SMTC interface IID for the .NET Framework WinRT projection, keeps the session enabled while a book is active, and publishes Kapla metadata/artwork. A local Windows runtime smoke test confirmed that the session can be created successfully. Playback was verified to continue while Kapla was minimized, and the application remained responsive.
 
 The automated QA environment could not lock the Windows desktop or emit hardware media-button input. Windows' global media-session query also failed because its session-enumeration service was unavailable. A final manual check with `Win+L` and the device's media buttons is still required.
 

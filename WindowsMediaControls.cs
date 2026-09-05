@@ -12,6 +12,14 @@ namespace Kapla
 {
     internal sealed class WindowsMediaControls : IDisposable
     {
+        // The WinRT projection exposes the runtime class GUID from
+        // typeof(SystemMediaTransportControls).GUID.  GetForWindow however
+        // expects the default interface IID.  .NET Framework's WinMD
+        // projection does not expose that internal interface publicly, so keep
+        // the stable SDK IID here explicitly.
+        private static readonly Guid SystemMediaTransportControlsInterfaceId =
+            new Guid("99FA3FF4-1742-42A6-902E-087D41F965EC");
+
         [ComImport]
         [Guid("DDB0472D-C911-4A1F-86D9-DC3D71A95F5A")]
         [InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
@@ -60,7 +68,7 @@ namespace Kapla
             {
                 var factory = WindowsRuntimeMarshal.GetActivationFactory(typeof(SystemMediaTransportControls));
                 var interop = (ISystemMediaTransportControlsInterop)factory;
-                var interfaceId = typeof(SystemMediaTransportControls).GUID;
+                var interfaceId = SystemMediaTransportControlsInterfaceId;
                 instance.controls = interop.GetForWindow(windowHandle, ref interfaceId);
                 instance.controls.IsEnabled = true;
                 instance.controls.IsPlayEnabled = true;
@@ -72,6 +80,8 @@ namespace Kapla
                 instance.controls.IsFastForwardEnabled = true;
                 instance.controls.ButtonPressed += instance.ControlsOnButtonPressed;
                 instance.controls.PlaybackPositionChangeRequested += instance.ControlsOnPlaybackPositionChangeRequested;
+                instance.controls.DisplayUpdater.Type = MediaPlaybackType.Music;
+                instance.controls.DisplayUpdater.AppMediaId = "Kapla";
                 instance.controls.PlaybackStatus = MediaPlaybackStatus.Closed;
             }
             catch
@@ -104,11 +114,15 @@ namespace Kapla
             if (String.Equals(key, displayedBookKey, StringComparison.Ordinal)
                 && String.Equals(chapterTitle, displayedChapter, StringComparison.Ordinal))
             {
+                // Re-assert the enabled/type state in case Windows has hidden
+                // the session after another app took media focus.
+                EnsureSessionEnabled();
                 return;
             }
 
             var updater = controls.DisplayUpdater;
             updater.Type = MediaPlaybackType.Music;
+            updater.AppMediaId = "Kapla";
             updater.MusicProperties.Title = String.IsNullOrWhiteSpace(book.Title) ? "Kapla audiobook" : book.Title;
             updater.MusicProperties.Artist = String.IsNullOrWhiteSpace(book.Author) ? "Unknown author" : book.Author;
             updater.MusicProperties.AlbumArtist = updater.MusicProperties.Artist;
@@ -120,6 +134,28 @@ namespace Kapla
             displayedBookKey = key;
             displayedChapter = chapterTitle;
             SetThumbnailAsync(key, book.CoverPath);
+        }
+
+        private void EnsureSessionEnabled()
+        {
+            if (!IsAvailable)
+            {
+                return;
+            }
+
+            try
+            {
+                controls.IsEnabled = true;
+                controls.DisplayUpdater.Type = MediaPlaybackType.Music;
+                controls.DisplayUpdater.AppMediaId = "Kapla";
+                controls.DisplayUpdater.Update();
+            }
+            catch
+            {
+                // Windows can tear down a media session while the desktop is
+                // locking or another app is taking focus. The next playback
+                // update will recreate the visible state.
+            }
         }
 
         private void SetThumbnailAsync(string bookKey, string coverPath)
@@ -168,9 +204,34 @@ namespace Kapla
             if (IsAvailable)
             {
                 controls.IsEnabled = hasBook;
+                controls.IsPlayEnabled = hasBook;
+                controls.IsPauseEnabled = hasBook;
+                controls.IsStopEnabled = hasBook;
+                controls.IsPreviousEnabled = hasBook;
+                controls.IsNextEnabled = hasBook;
+                controls.IsRewindEnabled = hasBook;
+                controls.IsFastForwardEnabled = hasBook;
+                if (hasBook)
+                {
+                    controls.DisplayUpdater.Type = MediaPlaybackType.Music;
+                    controls.DisplayUpdater.AppMediaId = "Kapla";
+                }
                 controls.PlaybackStatus = !hasBook
                     ? MediaPlaybackStatus.Closed
                     : isPlaying ? MediaPlaybackStatus.Playing : MediaPlaybackStatus.Paused;
+                if (hasBook)
+                {
+                    try
+                    {
+                        controls.DisplayUpdater.Update();
+                    }
+                    catch
+                    {
+                        // The session may briefly be unavailable during a
+                        // lock/unlock transition; status will be retried on
+                        // the next playback tick.
+                    }
+                }
             }
 
             SetThreadExecutionState(isPlaying
